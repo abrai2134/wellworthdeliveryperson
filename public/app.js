@@ -134,6 +134,7 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
       </form>
     </div>
     <p class="muted small" style="text-align:center">Ask your admin for your login ID and password.</p>
+    <p class="muted small" style="text-align:center;opacity:.7">Version ${esc(state.pub.version || '')}</p>
   </div>`;
   $app.querySelectorAll('[data-role]').forEach((b) => (b.onclick = () => { localStorageSet('role', b.dataset.role); renderLogin(b.dataset.role); }));
   const form = document.getElementById('login-form');
@@ -962,6 +963,7 @@ async function adminSheet(main) {
 function adminSettings(main) {
   const s = A().settings;
   main.innerHTML = `<h1>Settings</h1>
+    <p class="muted small">Running version <b>${esc(state.pub.version || '')}</b></p>
     <form class="card section" id="set-form">
       <div class="form-grid">
         <div><label>Company / app name</label><input name="orgName" value="${esc(s.orgName)}"></div>

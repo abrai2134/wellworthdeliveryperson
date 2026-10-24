@@ -11,6 +11,8 @@ const store = new Store(path.join(DATA_DIR, 'db.json'));
 const db = () => store.db;
 
 const SESSION_DAYS = 30;
+// Which code version is running (Render sets RENDER_GIT_COMMIT), shown on the login page.
+const VERSION = (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'local').slice(0, 7);
 const COOKIE = 'wd_session';
 const BOOK_AHEAD_DAYS = 400; // services can be a year ahead
 const TYPES = ['delivery', 'service'];
@@ -81,7 +83,7 @@ const norm = (v) => str(v).toLowerCase();
 
 // ---------- public ----------
 app.get('/api/public', (req, res) => {
-  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS });
+  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION });
 });
 
 app.post('/api/login', (req, res) => {
