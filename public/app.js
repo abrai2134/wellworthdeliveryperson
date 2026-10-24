@@ -47,13 +47,14 @@ function roleBadge(role) {
 }
 function needText(d) {
   const parts = [];
+  if (d.installation) parts.push(d.type === 'service' ? 'service person' : 'installation person');
   if (d.helpersNeeded) parts.push(`${d.helpersNeeded} helper${d.helpersNeeded > 1 ? 's' : ''}`);
-  if (d.installation) parts.push('installation person');
   return parts.join(' + ');
 }
-function placeName(t) {
+function placeName(t, d) {
   if (t.extra) return 'Emergency';
-  return t.role === 'installer' ? 'Installation' : `Helper ${t.slot + 1}`;
+  if (t.role === 'installer') return d && d.type === 'service' ? 'Service' : 'Installation';
+  return `Helper ${t.slot + 1}`;
 }
 function mapLink(address) {
   return address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '';
@@ -155,10 +156,47 @@ function localStorageGet(k) { try { return localStorage.getItem('wd_' + k); } ca
 function localStorageSet(k, v) { try { localStorage.setItem('wd_' + k, v); } catch { /* ignore */ } }
 
 // ---------- delivery card (shared by admin / unit / staff) ----------
+function fmtTime(iso) {
+  return iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+}
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return '';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+const durBetween = (a, b) => (a && b ? new Date(b) - new Date(a) : null);
+const isOpenJob = (d) => d.status === 'planned' || d.status === 'started';
+const jobName = (d) => (d.type === 'service' ? 'Service' : 'Delivery');
+
+function statusBadge(d, today) {
+  if (d.status === 'cancelled') return '<span class="badge">Cancelled</span>';
+  if (d.status === 'done') return '<span class="badge ok">✓ Completed</span>';
+  if (d.status === 'started') return '<span class="badge w4">🚚 Started</span>';
+  if (d.date < today) return '<span class="badge warn">Not marked completed</span>';
+  return d.open ? `<span class="badge bad">${d.open} open</span>` : '<span class="badge ok">Team ready</span>';
+}
+
+function timeline(d) {
+  const parts = [];
+  if (d.createdAt) parts.push(`Requested ${esc(fmtTime(d.createdAt))}${d.createdBy ? ' by ' + esc(d.createdBy) : ''}`);
+  if (d.startedAt) parts.push(`Started ${esc(fmtTime(d.startedAt))}`);
+  if (d.completedAt) {
+    const work = fmtDur(durBetween(d.startedAt, d.completedAt));
+    const total = fmtDur(durBetween(d.createdAt, d.completedAt));
+    parts.push(`<b>Completed ${esc(fmtTime(d.completedAt))}</b>${work || total ? ` (${[work && 'work ' + work, total && 'total ' + total].filter(Boolean).join(' · ')})` : ''}`);
+  }
+  return parts.length ? `<div class="small muted" style="margin-top:6px">🕒 ${parts.join(' · ')}</div>` : '';
+}
+
 // who: 'admin' | 'unit' | 'staff'
 function deliveryCard(d, who, today) {
   const past = d.date < today;
-  const canEdit = (who === 'admin' || who === 'unit') && !past && d.status !== 'cancelled';
+  const boss = who === 'admin' || who === 'unit';
+  const open = isOpenJob(d);
+  const canTeam = boss && open && !past;
   const team = d.team.map((t) => {
     const p = t.person;
     const tags = [
@@ -168,104 +206,176 @@ function deliveryCard(d, who, today) {
       t.fromUnit ? `<span class="small muted">moved from ${esc(t.fromUnit)}</span>` : '',
       t.reason ? `<span class="small muted">${esc(t.reason)}</span>` : '',
     ].join(' ');
-    const actions = !canEdit ? '' : [
+    const actions = !canTeam ? '' : [
       who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
       p ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent – replace'}</button>` : '',
     ].join('');
-    return `<div class="drv"><div class="row"><span class="small muted" style="width:86px">${esc(placeName(t))}</span>
-      ${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${p.unitName ? `<span class="small muted">(${esc(p.unitName)})</span>` : ''} ${tags}` : `<span class="empty">Nobody free – ${t.role === 'installer' ? 'installation person' : 'helper'} needed</span>`}</div>
-      <div class="row small" style="margin-left:92px">${p ? telLink(p.phone) : ''} ${actions}</div></div>`;
+    return `<div class="drv"><div class="row"><span class="small muted" style="width:86px">${esc(placeName(t, d))}</span>
+      ${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${p.unitName ? `<span class="small muted">(${esc(p.unitName)})</span>` : ''} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
+      ${p || actions ? `<div class="row small" style="margin-left:92px">${p ? telLink(p.phone) : ''} ${actions}</div>` : ''}</div>`;
   }).join('');
-  const lost = d.lost.length ? `<div class="badge bad" style="margin-top:8px;white-space:normal">⚠ ${d.lost.map((l) => `${esc(l.person)} was taken by ${esc(l.unit)} for an emergency`).join('; ')}</div>` : '';
-  const head = `<div class="row"><div><div class="name">${who === 'admin' || who === 'staff' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])}</div>
-      <div class="small muted">${esc(fmtDate(d.date))} · needs ${esc(needText(d))}</div></div><div class="spacer"></div>
-      ${d.status === 'cancelled' ? '<span class="badge">Cancelled</span>' : d.open ? `<span class="badge bad">${d.open} open</span>` : '<span class="badge ok">Team ready</span>'}</div>`;
+  const lost = open && d.lost.length ? `<div class="badge bad" style="margin-top:8px;white-space:normal">⚠ ${d.lost.map((l) => `${esc(l.person)} was taken by ${esc(l.unit)} for an emergency`).join('; ')}</div>` : '';
+  const typeTag = d.type === 'service' ? '<span class="badge w3">🔧 Service</span> ' : '';
+  const head = `<div class="row"><div><div class="name">${typeTag}${who === 'admin' || who === 'staff' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])}</div>
+      <div class="small muted">${esc(fmtDate(d.date))} · needs ${esc(needText(d))}</div></div><div class="spacer"></div>${statusBadge(d, today)}</div>`;
+  const links = [
+    d.parent ? `🔗 Follow-up of the ${d.parent.type === 'service' ? 'service' : 'delivery'} on ${esc(fmtDate(d.parent.date))}` : '',
+    d.services.length ? `🔧 Service booked: ${d.services.map((s) => `${esc(fmtDate(s.date))}${s.status === 'done' ? ' ✓' : ''}`).join(', ')}` : '',
+  ];
   const info = [
     d.customer ? `👤 <b>${esc(d.customer)}</b> ${telLink(d.customerPhone)}` : d.customerPhone ? `📞 ${telLink(d.customerPhone)}` : '',
     d.machine ? `⚙️ ${esc(d.machine)}` : '',
     d.address ? `📍 ${esc(d.address)} · <a target="_blank" rel="noopener" href="${mapLink(d.address)}">Map</a>` : '',
     d.notes ? `📝 ${esc(d.notes)}` : '',
+    d.completionNote ? `✅ ${esc(d.completionNote)}` : '',
+    ...links,
   ].filter(Boolean).map((x) => `<div class="small">${x}</div>`).join('');
-  const buttons = canEdit
-    ? `<div class="row no-print" style="margin-top:10px">
-        <button class="small" data-extra="${esc(d.id)}">🆘 Emergency person</button>
-        <button class="small" data-edit-del="${esc(d.id)}">Edit</button>
-        <button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>
-        <div class="spacer"></div>
-        <button class="small danger" data-cancel-del="${esc(d.id)}">Cancel delivery</button></div>`
-    : who !== 'staff' && d.status !== 'cancelled' ? `<div class="row no-print" style="margin-top:10px"><button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button></div>` : '';
-  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${team}${lost}${buttons}</div>`;
+  const btns = [];
+  if (boss && open && !(d.date > today)) {
+    if (d.status === 'planned') btns.push(`<button class="small" data-start="${esc(d.id)}">▶ Start</button>`);
+    btns.push(`<button class="small primary" data-complete="${esc(d.id)}">✓ Completed</button>`);
+  }
+  if (canTeam) {
+    btns.push(`<button class="small" data-extra="${esc(d.id)}">🆘 Emergency person</button>`);
+    btns.push(`<button class="small" data-edit-del="${esc(d.id)}">Edit</button>`);
+  }
+  if (boss && d.status === 'done') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
+  if (who !== 'staff' && d.status !== 'cancelled') btns.push(`<button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>`);
+  if (canTeam && d.status === 'planned') btns.push(`<div class="spacer"></div><button class="small danger" data-cancel-del="${esc(d.id)}">Cancel</button>`);
+  if (boss && (d.status === 'done' || d.status === 'started')) btns.push(`<div class="spacer"></div><button class="link small" data-reopen="${esc(d.id)}">${d.status === 'done' ? 'Reopen' : 'Undo start'}</button>`);
+  const buttons = btns.length ? `<div class="row no-print" style="margin-top:10px">${btns.join('')}</div>` : '';
+  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${team}${lost}${buttons}</div>`;
 }
 
 function waText(d) {
-  const lines = [`*${state.pub.orgName} – Delivery ${fmtDate(d.date)} (${SESSION_NAMES[d.session]})*`, `Unit: ${d.unitName}`];
+  const lines = [`*${state.pub.orgName} – ${jobName(d)} ${fmtDate(d.date)} (${SESSION_NAMES[d.session]})*`, `Unit: ${d.unitName}`];
   if (d.customer) lines.push(`Customer: ${d.customer}${d.customerPhone ? ' (' + d.customerPhone + ')' : ''}`);
   if (d.machine) lines.push(`Machine: ${d.machine}`);
   if (d.address) lines.push(`Address: ${d.address}`);
+  if (d.notes) lines.push(`Note: ${d.notes}`);
   lines.push('Team:');
   for (const t of d.team) {
     const p = t.person;
-    lines.push(`• ${placeName(t)}: ${p ? p.name + (p.phone ? ' ' + p.phone : '') : '(open)'}`);
+    lines.push(`• ${placeName(t, d)}: ${p ? p.name + (p.phone ? ' ' + p.phone : '') : '(open)'}`);
   }
+  if (d.status === 'done') lines.push(`✅ Completed ${fmtTime(d.completedAt)}`);
   return lines.join('\n');
 }
 
 // Hook up the buttons inside delivery cards. `base` is '/unit' or '/admin'; `list` the deliveries shown.
 function bindDeliveryButtons(root, base, list, reload) {
   const find = (id) => list.find((d) => d.id === id);
+  const post = async (url, msg, body) => {
+    try { await api(url, { method: 'POST', body }); toast(msg); reload(); } catch (ex) { toast(ex.message, true); }
+  };
   root.querySelectorAll('[data-wa]').forEach((b) => (b.onclick = () => window.open('https://wa.me/?text=' + encodeURIComponent(waText(find(b.dataset.wa))), '_blank')));
   root.querySelectorAll('[data-edit-del]').forEach((b) => (b.onclick = () => deliveryForm(base, find(b.dataset.editDel), reload)));
-  root.querySelectorAll('[data-cancel-del]').forEach((b) => (b.onclick = async () => {
-    if (!confirm('Cancel this delivery? Its helpers become free.')) return;
-    try { await api(`${base}/deliveries/${b.dataset.cancelDel}/cancel`, { method: 'POST' }); toast('Delivery cancelled'); reload(); } catch (ex) { toast(ex.message, true); }
+  root.querySelectorAll('[data-cancel-del]').forEach((b) => (b.onclick = () => {
+    if (confirm('Cancel this job? Its team becomes free.')) post(`${base}/deliveries/${b.dataset.cancelDel}/cancel`, 'Cancelled');
+  }));
+  root.querySelectorAll('[data-start]').forEach((b) => (b.onclick = () => post(`${base}/deliveries/${b.dataset.start}/start`, 'Marked as started – time noted')));
+  root.querySelectorAll('[data-reopen]').forEach((b) => (b.onclick = () => {
+    if (confirm('Open this job again? Completed / start time is cleared.')) post(`${base}/deliveries/${b.dataset.reopen}/reopen`, 'Opened again');
+  }));
+  root.querySelectorAll('[data-complete]').forEach((b) => (b.onclick = () => completeForm(base, find(b.dataset.complete), reload)));
+  root.querySelectorAll('[data-service]').forEach((b) => (b.onclick = () => {
+    const p = find(b.dataset.service);
+    deliveryForm(base, null, reload, addDays(state.today, 30), { ...p, type: 'service', parentId: p.id, helpersNeeded: 0, installation: true, session: 'FULL', notes: '' });
   }));
   root.querySelectorAll('[data-replace]').forEach((b) => (b.onclick = async () => {
     const [id, personId, name] = b.dataset.replace.split('|');
     const d = find(id);
     const t = d.team.find((x) => x.person && x.person.id === personId);
-    const msg = t && t.extra ? `Remove ${name} (emergency person) from this delivery?` : `${name} can't come? They are taken off this delivery and someone else is picked automatically.`;
+    const msg = t && t.extra ? `Remove ${name} (emergency person) from this job?` : `${name} can't come? They are taken off this job and someone else is picked automatically.`;
     if (!confirm(msg)) return;
-    try {
-      if (t && t.extra) await api(`${base}/deliveries/${id}/extra/cancel`, { method: 'POST', body: { slot: t.slot } });
-      else await api(`${base}/deliveries/${id}/replace`, { method: 'POST', body: { personId } });
-      toast('Done – team updated');
-      reload();
-    } catch (ex) { toast(ex.message, true); }
+    if (t && t.extra) post(`${base}/deliveries/${id}/extra/cancel`, 'Done – team updated', { slot: t.slot });
+    else post(`${base}/deliveries/${id}/replace`, 'Done – team updated', { personId });
   }));
   root.querySelectorAll('[data-extra]').forEach((b) => (b.onclick = () => askExtra(base, find(b.dataset.extra), reload)));
   root.querySelectorAll('[data-change]').forEach((b) => (b.onclick = () => { const [id, role, slot] = b.dataset.change.split('|'); changePlace(find(id), role, Number(slot)); }));
 }
 
-function deliveryForm(base, d, reload, presetDate) {
+function helperOptions(n) {
+  return Array.from({ length: state.pub.maxHelpers + 1 }, (_, i) => `<option value="${i}" ${Number(n) === i ? 'selected' : ''}>${i === 0 ? 'No helper' : i + (i === 1 ? ' helper' : ' helpers')}</option>`).join('');
+}
+
+function completeForm(base, d, reload) {
+  const after = [['', 'No service needed'], ['7', 'After 1 week'], ['15', 'After 15 days'], ['30', 'After 1 month'], ['60', 'After 2 months'], ['90', 'After 3 months'], ['180', 'After 6 months'], ['365', 'After 1 year'], ['date', 'Choose a date…']];
+  openModal(`<h2>${jobName(d)} completed</h2>
+    <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
+    <p class="small">The completed time is saved now (${esc(fmtTime(new Date().toISOString()))}) and the team becomes free for other jobs today.</p>
+    <label>Note (optional)</label><input name="note" placeholder="e.g. installed and running, customer signed">
+    <label>Service needed later?</label><select name="serviceAfter" id="svc-after">${after.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+    <div id="svc-more" hidden>
+      <div class="form-grid">
+        <div id="svc-date-wrap" hidden><label>Service date</label><input type="date" name="serviceDate" min="${esc(state.today)}" value="${esc(addDays(state.today, 30))}"></div>
+        <div><label>Time</label><select name="serviceSession">${state.pub.sessions.map((s) => `<option value="${s}">${SESSION_NAMES[s]}</option>`).join('')}</select></div>
+        <div><label>Helpers for service</label><select name="serviceHelpers">${helperOptions(0)}</select></div>
+      </div>
+      <label>What service?</label><input name="serviceNotes" placeholder="e.g. first free service, oil change">
+      <p class="muted small">A service person (installation person) is picked automatically, the same fair way.</p>
+    </div>
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Mark completed</button></div>`,
+  async (fd) => {
+    await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body: Object.fromEntries(fd) });
+    toast(fd.get('serviceAfter') ? 'Completed – service booked' : 'Completed – team is free');
+    reload();
+  });
+  const sel = document.getElementById('svc-after');
+  sel.onchange = () => {
+    document.getElementById('svc-more').hidden = !sel.value;
+    document.getElementById('svc-date-wrap').hidden = sel.value !== 'date';
+  };
+}
+
+// d = existing job to edit; preset = values for a new job (e.g. a service from a delivery)
+function deliveryForm(base, d, reload, presetDate, preset) {
   const isAdmin = base === '/admin';
   const def = state.defaultHelpers ?? 2;
-  const v = d || { date: presetDate || state.today, session: 'FULL', helpersNeeded: def, installation: false, customer: '', customerPhone: '', address: '', machine: '', notes: '', unitId: '' };
+  const v = d || { type: 'delivery', date: presetDate || state.today, session: 'FULL', helpersNeeded: def, installation: false, customer: '', customerPhone: '', address: '', machine: '', notes: '', unitId: '', ...(preset || {}), ...(preset ? { date: presetDate || state.today } : {}) };
   const units = isAdmin ? A().units.filter((u) => u.active) : [];
-  const helperOpts = Array.from({ length: state.pub.maxHelpers + 1 }, (_, i) => `<option value="${i}" ${Number(v.helpersNeeded) === i ? 'selected' : ''}>${i === 0 ? 'No helper' : i + (i === 1 ? ' helper' : ' helpers')}</option>`).join('');
-  openModal(`<h2>${d ? 'Edit delivery' : 'New delivery'}</h2>
-    ${isAdmin ? `<label>Unit *</label><select name="unitId" ${d ? 'disabled' : ''} required>${units.map((u) => `<option value="${esc(u.id)}" ${v.unitId === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+  const lockUnit = !!d || !!(preset && preset.parentId);
+  openModal(`<h2>${d ? 'Edit ' + jobName(v).toLowerCase() : v.parentId ? 'Book service' : 'New job'}</h2>
+    ${v.parentId ? `<div class="muted small">Follow-up for ${esc(v.customer || 'this customer')}${v.machine ? ' · ' + esc(v.machine) : ''}</div><input type="hidden" name="parentId" value="${esc(v.parentId)}">` : ''}
+    ${isAdmin ? `<label>Unit *</label><select name="unitId" ${lockUnit ? 'disabled' : ''} required>${units.map((u) => `<option value="${esc(u.id)}" ${v.unitId === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>${lockUnit ? `<input type="hidden" name="unitId" value="${esc(v.unitId)}">` : ''}` : ''}
     <div class="form-grid">
-      <div><label>Delivery date *</label><input type="date" name="date" required value="${esc(v.date)}" min="${esc(state.today)}"></div>
+      <div><label>Type</label><select name="type" id="f-type"><option value="delivery">🚚 Delivery</option><option value="service" ${v.type === 'service' ? 'selected' : ''}>🔧 Service</option></select></div>
+      <div><label id="f-date-l">Date *</label><input type="date" name="date" required value="${esc(v.date)}" min="${esc(state.today)}"></div>
       <div><label>Time</label><select name="session">${state.pub.sessions.map((s) => `<option value="${s}" ${v.session === s ? 'selected' : ''}>${SESSION_NAMES[s]}</option>`).join('')}</select></div>
-      <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOpts}</select></div>
-      <div><label>Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes – need installation</option></select></div>
+      <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
+      <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
     <div class="form-grid">
       <div><label>Customer / party name</label><input name="customer" value="${esc(v.customer)}"></div>
       <div><label>Customer phone</label><input name="customerPhone" type="tel" value="${esc(v.customerPhone)}"></div>
       <div><label>Machine / model</label><input name="machine" value="${esc(v.machine)}" placeholder="e.g. 10 HP screw compressor"></div>
     </div>
-    <label>Delivery address</label><textarea name="address">${esc(v.address)}</textarea>
-    <label>Notes</label><input name="notes" value="${esc(v.notes)}" placeholder="e.g. 2nd floor, no lift">
-    <p class="muted small">Helpers are picked fairly from all units. "Morning" and "Afternoon" deliveries can share people; a "Full day" delivery keeps them the whole day.</p>
-    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book delivery'}</button></div>`,
+    <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
+    <label id="f-notes-l">Notes</label><input name="notes" value="${esc(v.notes)}" placeholder="e.g. 2nd floor, no lift">
+    <p class="muted small">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book'}</button></div>`,
   async (fd) => {
     const body = Object.fromEntries(fd);
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
     else await api(`${base}/deliveries`, { method: 'POST', body });
-    toast(d ? 'Delivery updated' : 'Delivery booked – team assigned');
+    toast(d ? 'Saved' : 'Booked – team assigned');
     reload();
   });
+  const type = document.getElementById('f-type');
+  const sync = () => {
+    const svc = type.value === 'service';
+    document.getElementById('f-inst-l').textContent = svc ? 'Service person (technician) needed?' : 'Installation person needed?';
+    document.getElementById('f-date-l').textContent = svc ? 'Service date *' : 'Delivery date *';
+    document.getElementById('f-notes-l').textContent = svc ? 'What service?' : 'Notes';
+  };
+  type.onchange = () => {
+    if (!d && type.value === 'service') {
+      modalBody.querySelector('[name=installation]').value = 'yes';
+      modalBody.querySelector('[name=helpersNeeded]').value = '0';
+    }
+    sync();
+  };
+  sync();
 }
 
 function askExtra(base, d, reload) {
@@ -329,21 +439,26 @@ async function renderUnit() {
     bindLogout();
   }
   const data = await api('/unit/home');
-  state.today = data.today;
+  const t = data.today;
+  state.today = t;
   state.defaultHelpers = data.defaultHelpers;
-  const upcoming = data.deliveries.filter((d) => d.date >= data.today);
-  const recent = data.deliveries.filter((d) => d.date < data.today).reverse();
-  const todays = upcoming.filter((d) => d.date === data.today);
-  const open = upcoming.reduce((n, d) => n + d.open, 0);
+  const all = data.deliveries;
+  const pendingPast = all.filter((d) => d.date < t && isOpenJob(d));
+  const upcoming = all.filter((d) => d.date >= t);
+  const done = all.filter((d) => d.date < t && d.status === 'done').reverse();
+  const todays = upcoming.filter((d) => d.date === t);
+  const todayOpen = todays.filter(isOpenJob).length;
+  const open = upcoming.filter(isOpenJob).reduce((n, d) => n + d.open, 0);
   const wrap = $app.querySelector('.wrap');
-  wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(data.today))}</div>
-      <div class="big">${todays.length ? `${todays.length} deliver${todays.length > 1 ? 'ies' : 'y'} today` : 'No delivery today'}</div>
-      <div class="line">${upcoming.length} upcoming${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
-      <div class="row"><a class="call" href="#" id="book">+ Book a delivery</a></div></div>
-    ${upcoming.length ? groupByDate(upcoming, data.today, (d) => deliveryCard(d, 'unit', data.today)) : '<div class="card muted">No deliveries booked. Tap "Book a delivery" and choose how many helpers and if installation is needed – the team is picked automatically.</div>'}
-    ${recent.length ? `<details class="card"><summary><b>Last 7 days</b></summary><div class="grid" style="margin-top:10px">${recent.map((d) => deliveryCard(d, 'unit', data.today)).join('')}</div></details>` : ''}`;
+  wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
+      <div class="big">${todays.length ? `${todays.length} job${todays.length > 1 ? 's' : ''} today${todayOpen < todays.length ? ` · ${todays.length - todayOpen} completed` : ''}` : 'No job today'}</div>
+      <div class="line">${upcoming.filter(isOpenJob).length} open${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
+      <div class="row"><a class="call" href="#" id="book">+ Book delivery / service</a></div></div>
+    ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></div>` : ''}
+    ${upcoming.length ? groupByDate(upcoming, t, (d) => deliveryCard(d, 'unit', t)) : '<div class="card muted">Nothing booked. Tap "Book delivery / service", choose how many helpers and if an installation / service person is needed – the team is picked automatically.</div>'}
+    ${done.length ? `<details class="card"><summary><b>Completed – last 30 days (${done.length})</b></summary><div class="grid" style="margin-top:10px">${done.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></details>` : ''}`;
   document.getElementById('book').onclick = (e) => { e.preventDefault(); deliveryForm('/unit', null, renderUnit); };
-  bindDeliveryButtons(wrap, '/unit', data.deliveries, renderUnit);
+  bindDeliveryButtons(wrap, '/unit', all, renderUnit);
 }
 
 // ---------- staff view ----------
@@ -353,17 +468,18 @@ async function renderStaff() {
   const data = await api('/staff/home');
   const todays = data.jobs.filter((j) => j.date === data.today);
   const hero = todays.length
-    ? todays.map((j) => `<div class="hero"><div class="label">Today · ${esc(SESSION_NAMES[j.session])} · you are ${j.myRole === 'installer' ? 'installation person' : 'helper'}${j.extra ? ' (emergency)' : ''}</div>
+    ? todays.map((j) => `<div class="hero${j.status === 'done' ? ' off' : ''}"><div class="label">Today · ${esc(SESSION_NAMES[j.session])} · ${j.type === 'service' ? '🔧 service' : 'delivery'} · you are ${j.myRole === 'installer' ? (j.type === 'service' ? 'service person' : 'installation person') : 'helper'}${j.extra ? ' (emergency)' : ''}${j.status === 'done' ? ' · ✓ completed' : j.status === 'started' ? ' · started' : ''}</div>
         <div class="big">${esc(j.unitName)}</div>
         ${j.customer ? `<div class="line">👤 ${esc(j.customer)}${j.machine ? ' · ' + esc(j.machine) : ''}</div>` : ''}
         ${j.address ? `<div class="line">📍 ${esc(j.address)}</div>` : ''}
-        <div class="line small">Team: ${j.team.filter((t) => t.person).map((t) => esc(t.person.name)).join(', ')}</div>
+        ${j.notes ? `<div class="line">📝 ${esc(j.notes)}</div>` : ''}
+        <div class="line small">Team: ${j.team.filter((x) => x.person).map((x) => esc(x.person.name)).join(', ')}</div>
         <div class="row">${j.unit && j.unit.phone ? `<a class="call" href="tel:${esc(j.unit.phone.replace(/[^\d+]/g, ''))}">📞 Call unit</a>` : ''}
         ${j.address ? `<a class="call" target="_blank" rel="noopener" href="${mapLink(j.address)}">🗺️ Map</a>` : ''}</div></div>`).join('')
-    : `<div class="hero off"><div class="label">Today · ${esc(fmtDate(data.today))}</div><div class="big">${data.leaves.some((l) => l.from <= data.today) ? 'You are on leave' : 'No delivery today'}</div></div>`;
+    : `<div class="hero off"><div class="label">Today · ${esc(fmtDate(data.today))}</div><div class="big">${data.leaves.some((l) => l.from <= data.today) ? 'You are on leave' : 'No job today'}</div></div>`;
   const later = data.jobs.filter((j) => j.date > data.today);
   $app.querySelector('.wrap').innerHTML = `${hero}
-    <div class="row section"><h2 style="margin:0">Next deliveries</h2><div class="spacer"></div><span class="badge ok">${data.monthDuties} deliver${data.monthDuties === 1 ? 'y' : 'ies'} this month</span></div>
+    <div class="row section"><h2 style="margin:0">Next jobs</h2><div class="spacer"></div><span class="badge ok">${data.monthDuties} job${data.monthDuties === 1 ? '' : 's'} this month</span></div>
     ${later.length ? `<div class="grid">${later.map((d) => deliveryCard(d, 'staff', data.today)).join('')}</div>` : '<div class="card muted">Nothing planned yet.</div>'}`;
 }
 
@@ -374,7 +490,7 @@ const TABS = [
   ['units', 'Units'],
   ['people', 'Helpers & installers'],
   ['leaves', 'Leave'],
-  ['report', 'Fairness report'],
+  ['report', 'Report'],
   ['settings', 'Settings'],
 ];
 
@@ -417,37 +533,42 @@ async function adminToday(main) {
     main.innerHTML = `<div class="card"><h2>Welcome! Let's set things up</h2>
       <ol><li>Go to <b>Units</b> and add your units (each gets its own login).</li>
       <li>Go to <b>Helpers &amp; installers</b> and add each unit's helpers and installation persons. Tick <b>Emergency backup</b> for people who should only be used when the others are short.</li>
-      <li>Each unit logs in and books a delivery: date, how many helpers, installation yes/no.</li>
-      <li>The team is picked automatically and fairly from all units. Units can ask for an 🆘 emergency person any time.</li></ol></div>`;
+      <li>Each unit logs in and books a delivery or service: date, how many helpers, installation yes/no.</li>
+      <li>The team is picked automatically and fairly from all units. Units can ask for an 🆘 emergency person any time, and mark the job ✓ Completed when done.</li></ol></div>`;
     return;
   }
-  // Today's deliveries may be outside the chosen range; fetch today explicitly.
+  // Today's jobs may be outside the chosen range; fetch today explicitly, plus older open jobs.
   const day = await api(`/admin/data?from=${t}&to=${t}`);
-  const todays = day.deliveries.filter((d) => d.status !== 'cancelled');
-  const busy = new Set(todays.flatMap((d) => d.team.filter((x) => x.person).map((x) => x.person.id)));
+  const older = await api(`/admin/data?from=${addDays(t, -30)}&to=${addDays(t, -1)}`);
+  const todays = day.deliveries.filter((d) => d.status !== 'cancelled').sort((a, b) => (isOpenJob(b) ? 1 : 0) - (isOpenJob(a) ? 1 : 0));
+  const pendingPast = older.deliveries.filter(isOpenJob);
+  const openToday = todays.filter(isOpenJob);
+  const busy = new Set(openToday.flatMap((d) => d.team.filter((x) => x.person).map((x) => x.person.id)));
   const free = A().people.filter((p) => p.active && !busy.has(p.id));
   const tag = (p) => `${esc(p.name)} ${onLeaveOn(p.id, t) ? '<span class="badge warn">leave</span>' : p.backup ? '<span class="badge bad">backup</span>' : ''}`;
+  const doneCount = todays.length - openToday.length;
   main.innerHTML = `<div class="row section"><div><h1>Today · ${esc(fmtDate(t, { weekday: 'long', day: 'numeric', month: 'long' }))}</h1>
-      <div class="muted">${todays.length} deliver${todays.length === 1 ? 'y' : 'ies'} · ${todays.reduce((n, d) => n + d.team.filter((x) => x.person).length, 0)} people out${todays.some((d) => d.open) ? ` · <b class="empty">${todays.reduce((n, d) => n + d.open, 0)} place(s) open</b>` : ''}</div></div>
-      <div class="spacer"></div><button class="primary" id="add">+ New delivery</button></div>
-    ${todays.length ? `<div class="grid">${todays.map((d) => deliveryCard(d, 'admin', t)).join('')}</div>` : '<div class="card muted">No delivery today.</div>'}
-    <div class="card" style="margin-top:12px"><h3>Not on a delivery today</h3>
+      <div class="muted">${todays.length} job${todays.length === 1 ? '' : 's'}${doneCount ? ` · ${doneCount} completed` : ''} · ${busy.size} people out now${openToday.some((d) => d.open) ? ` · <b class="empty">${openToday.reduce((n, d) => n + d.open, 0)} place(s) open</b>` : ''}</div></div>
+      <div class="spacer"></div><button class="primary" id="add">+ New job</button></div>
+    ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'admin', t)).join('')}</div></div>` : ''}
+    ${todays.length ? `<div class="grid">${todays.map((d) => deliveryCard(d, 'admin', t)).join('')}</div>` : '<div class="card muted">No job today.</div>'}
+    <div class="card" style="margin-top:12px"><h3>Free now (not on an open job)</h3>
       <div class="small"><b>Helpers:</b> ${free.filter((p) => canDo(p, 'helper')).map(tag).join(' &nbsp; ') || '<span class="muted">none</span>'}</div>
-      <div class="small" style="margin-top:4px"><b>Installation:</b> ${free.filter((p) => canDo(p, 'installer')).map(tag).join(' &nbsp; ') || '<span class="muted">none</span>'}</div></div>`;
+      <div class="small" style="margin-top:4px"><b>Installation / service:</b> ${free.filter((p) => canDo(p, 'installer')).map(tag).join(' &nbsp; ') || '<span class="muted">none</span>'}</div></div>`;
   document.getElementById('add').onclick = () => deliveryForm('/admin', null, renderAdmin, t);
-  bindDeliveryButtons(main, '/admin', todays, renderAdmin);
+  bindDeliveryButtons(main, '/admin', [...todays, ...pendingPast], renderAdmin);
 }
 
 function changePlace(d, role, slot) {
   const current = d.team.find((t) => t.role === role && t.slot === slot && !t.extra);
   const opts = A().people.filter((p) => p.active && canDo(p, role)).map((p) => {
     const leave = onLeaveOn(p.id, d.date);
-    const there = A().deliveries.find((x) => x.date === d.date && x.status !== 'cancelled' && x.team.some((t) => t.person && t.person.id === p.id) && (x.id === d.id || x.session === 'FULL' || d.session === 'FULL' || x.session === d.session));
+    const there = A().deliveries.find((x) => x.date === d.date && isOpenJob(x) && x.team.some((t) => t.person && t.person.id === p.id) && (x.id === d.id || x.session === 'FULL' || d.session === 'FULL' || x.session === d.session));
     const note = leave ? ' — on leave' : there && !(current && current.person && current.person.id === p.id) ? ` — on ${there.id === d.id ? 'this delivery' : there.unitName + ' delivery'} (will swap)` : '';
     return `<option value="${esc(p.id)}" ${current && current.person && current.person.id === p.id ? 'selected' : ''} ${leave ? 'disabled' : ''}>${p.backup ? '🆘 ' : ''}${esc(p.name)} (${esc(p.unitName || 'no unit')})${esc(note)}</option>`;
   }).join('');
   openModal(`<h2>Change ${role === 'installer' ? 'installation person' : 'helper'}</h2>
-    <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))} · ${esc(SESSION_NAMES[d.session])} · ${esc(placeName({ role, slot }))}</div>
+    <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))} · ${esc(SESSION_NAMES[d.session])} · ${esc(placeName({ role, slot }, d))}</div>
     <label>Person</label><select name="personId" required><option value="">— choose —</option>${opts}</select>
     <p class="muted small">Only people of the matching kind are listed. If you only want someone else (anyone), close this and use "Absent – replace".</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
@@ -462,27 +583,32 @@ function changePlace(d, role, slot) {
 // --- Deliveries ---
 function adminDeliveries(main) {
   const t = A().today;
-  const showCancelled = state.showCancelled;
-  const list = A().deliveries.filter((d) => showCancelled || d.status !== 'cancelled');
+  const f = state.filter || { type: '', status: 'active' };
+  const list = A().deliveries.filter((d) => (!f.type || d.type === f.type) &&
+    (f.status === 'all' || (f.status === 'active' && d.status !== 'cancelled') || (f.status === 'open' && isOpenJob(d)) || (f.status === 'done' && d.status === 'done') || (f.status === 'cancelled' && d.status === 'cancelled')));
+  const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
   main.innerHTML = `<div class="row section no-print">
       <button id="prev">◀ Prev</button><button id="this">Next 2 weeks</button><button id="next">Next ▶</button>
       <input type="date" id="from" value="${esc(A().from)}" style="width:auto"> to <input type="date" id="to" value="${esc(A().to)}" style="width:auto">
       <button id="go">Show</button>
-      <label class="check"><input type="checkbox" id="cx" ${showCancelled ? 'checked' : ''}> show cancelled</label>
+      <select id="ft" style="width:auto">${opt('', 'Deliveries + services', f.type)}${opt('delivery', '🚚 Deliveries only', f.type)}${opt('service', '🔧 Services only', f.type)}</select>
+      <select id="fs" style="width:auto">${opt('active', 'All except cancelled', f.status)}${opt('open', 'Open only', f.status)}${opt('done', 'Completed only', f.status)}${opt('cancelled', 'Cancelled', f.status)}${opt('all', 'Everything', f.status)}</select>
       <div class="spacer"></div>
-      <button id="print">🖨️ Print</button><button id="rebal">↻ Re-balance</button><button class="primary" id="add">+ New delivery</button></div>
+      <button id="print">🖨️ Print</button><button id="rebal">↻ Re-balance</button><button class="primary" id="add">+ New job</button></div>
     <h2 class="print-only">${esc(state.pub.orgName)} – ${esc(fmtDate(A().from))} to ${esc(fmtDate(A().to))}</h2>
-    ${list.length ? groupByDate(list, t, (d) => deliveryCard(d, 'admin', t)) : '<div class="card muted">No deliveries in these dates.</div>'}`;
+    <p class="muted small no-print">${list.length} job(s) · ${list.filter((d) => d.status === 'done').length} completed · ${list.filter((d) => d.type === 'service').length} service(s)</p>
+    ${list.length ? groupByDate(list, t, (d) => deliveryCard(d, 'admin', t)) : '<div class="card muted">No jobs match.</div>'}`;
   const go = (from, to) => { state.from = from; state.to = to; renderAdmin(); };
   document.getElementById('prev').onclick = () => go(addDays(state.from, -14), addDays(state.to, -14));
   document.getElementById('next').onclick = () => go(addDays(state.from, 14), addDays(state.to, 14));
   document.getElementById('this').onclick = () => go(t, addDays(t, 13));
   document.getElementById('go').onclick = () => go(document.getElementById('from').value, document.getElementById('to').value);
-  document.getElementById('cx').onchange = (e) => { state.showCancelled = e.target.checked; adminDeliveries(main); };
+  document.getElementById('ft').onchange = (e) => { state.filter = { ...f, type: e.target.value }; adminDeliveries(main); };
+  document.getElementById('fs').onchange = (e) => { state.filter = { ...f, status: e.target.value }; adminDeliveries(main); };
   document.getElementById('print').onclick = () => window.print();
   document.getElementById('add').onclick = () => deliveryForm('/admin', null, renderAdmin);
   document.getElementById('rebal').onclick = () => openModal(`<h2>Re-balance teams</h2>
-      <p>Teams normally stay as they are once made. Re-balance makes all teams again from the chosen day, using the fairness rules. Past days never change.</p>
+      <p>Teams normally stay as they are once made. Re-balance makes all open teams again from the chosen day, using the fairness rules. Past and completed jobs never change.</p>
       <label>Starting from</label><input type="date" name="from" value="${esc(addDays(t, 1))}" min="${esc(t)}">
       <label class="check"><input type="checkbox" name="keepManual" checked> Keep my manual changes</label>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Re-balance</button></div>`,
@@ -648,16 +774,35 @@ async function adminReport(main) {
   const sh = spreadOf('helper');
   const si = spreadOf('installer');
   const ok = (n) => (n <= 1 ? '<span class="badge ok">Balanced</span>' : '<span class="badge warn">Check leave / new people</span>');
-  main.innerHTML = `<div class="row section"><h1>Fairness report</h1><div class="spacer"></div>
+  // Time taken
+  const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+  const work = (c) => durBetween(c.startedAt, c.completedAt);
+  const total = (c) => durBetween(c.createdAt, c.completedAt);
+  const timeRow = (label, list) => {
+    const w = list.map(work).filter((x) => x != null && x >= 0);
+    const tt = list.map(total).filter((x) => x != null && x >= 0);
+    return `<tr><td><b>${esc(label)}</b></td><td class="num">${list.length}</td><td class="num">${esc(fmtDur(avg(w)) || '—')}</td><td class="num">${esc(fmtDur(avg(tt)) || '—')}</td></tr>`;
+  };
+  const byUnit = s.units.map((u) => [u.name, s.completed.filter((c) => c.unitId === u.id)]).filter(([, l]) => l.length);
+  const timeCard = `<div class="card section"><h2>Time taken</h2>
+    <div class="muted small">Work time = Start → Completed. Total time = request added → Completed (includes waiting for the booked day).${s.pending ? ` <span class="badge warn">${s.pending} earlier job(s) not marked completed</span>` : ''}</div>
+    ${s.completed.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th></th><th class="num">Completed</th><th class="num">Avg work time</th><th class="num">Avg total time</th></tr></thead><tbody>
+      ${timeRow('All jobs', s.completed)}${timeRow('🚚 Deliveries', s.completed.filter((c) => c.type !== 'service'))}${timeRow('🔧 Services', s.completed.filter((c) => c.type === 'service'))}
+      ${byUnit.map(([n, l]) => timeRow(n, l)).join('')}</tbody></table></div>
+    <details style="margin-top:8px"><summary class="small"><b>Each completed job</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Date</th><th>Unit</th><th>Customer</th><th>Requested</th><th>Started</th><th>Completed</th><th class="num">Work</th><th class="num">Total</th></tr></thead><tbody>
+      ${s.completed.map((c) => `<tr><td>${esc(fmtDate(c.date))}${c.type === 'service' ? ' 🔧' : ''}</td><td>${esc(c.unitName)}</td><td>${esc(c.customer)}</td><td class="small">${esc(fmtTime(c.createdAt))}</td><td class="small">${esc(fmtTime(c.startedAt) || '—')}</td><td class="small">${esc(fmtTime(c.completedAt))}</td><td class="num">${esc(fmtDur(work(c)) || '—')}</td><td class="num">${esc(fmtDur(total(c)) || '—')}</td></tr>`).join('')}
+    </tbody></table></div></details>` : '<p class="muted">No completed jobs in these dates yet.</p>'}</div>`;
+  main.innerHTML = `<div class="row section"><h1>Report</h1><div class="spacer"></div>
       <input type="date" id="rf" value="${esc(from)}" style="width:auto"> to <input type="date" id="rt" value="${esc(to)}" style="width:auto"><button id="rgo">Show</button></div>
-    <div class="card section">${s.deliveries} deliveries.
+    ${timeCard}
+    <div class="card section"><h2>Fairness</h2>${s.deliveries} jobs.
       <div class="small">Helpers – difference between most and least: <b>${sh}</b> ${ok(sh)}</div>
       <div class="small">Installation persons – difference: <b>${si}</b> ${ok(si)}</div>
       ${s.unfilled ? `<div class="small" style="margin-top:6px"><span class="badge bad">${s.unfilled} open places</span> – not enough people on some days.</div>` : ''}</div>
     <div class="table-wrap"><table><thead><tr><th>Person</th><th class="num">Total</th><th class="num">As helper</th><th class="num">As installer</th><th class="num">Emergency</th><th class="num">Leave days</th>${s.units.map((u) => `<th class="num">${esc(u.name)}</th>`).join('')}</tr></thead>
     <tbody>${s.rows.map((r) => `<tr><td><b>${esc(r.name)}</b> ${roleBadge(r.role)}${r.backup ? ' <span class="badge bad">backup</span>' : ''}${r.active ? '' : ' <span class="badge">inactive</span>'}<div class="small muted">${esc(r.unitName)}</div></td>
       <td class="num"><b>${r.total}</b></td><td class="num">${r.helper}</td><td class="num">${r.installer}</td><td class="num">${r.emergency}</td><td class="num">${r.leaveDays}</td>${s.units.map((u) => `<td class="num">${heat(r.perUnit[u.id] || 0)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
-    <p class="muted small">Counts include planned future deliveries up to the end date. The unit columns show how often each person went on that unit's deliveries — an even spread means people are shuffled well across units.</p>`;
+    <p class="muted small">Counts include planned future jobs up to the end date. The unit columns show how often each person went on that unit's jobs — an even spread means people are shuffled well across units.</p>`;
   document.getElementById('rgo').onclick = () => { state.repFrom = document.getElementById('rf').value; state.repTo = document.getElementById('rt').value; renderAdmin(); };
 }
 

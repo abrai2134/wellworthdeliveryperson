@@ -10,6 +10,9 @@ A small website that **picks the helpers and installation person for every machi
 - **Absent – replace** – if a helper can't come, the unit taps it and someone else is picked automatically. The rest of the team stays the same.
 - **Leave** – admin marks leave; only that person's place is refilled.
 - **Teams stay stable** – once a team is made it is not reshuffled. Admin can *Re-balance* from a date if wanted, and can change any person by hand (two people swap if needed).
+- **Start / Completed** – the unit taps **▶ Start** when the team leaves and **✓ Completed** when the job is done. The team is then free straight away, and any other job that day that was short of people gets them automatically. Times are saved: *requested*, *started*, *completed*.
+- **Time taken report** – average work time (start → completed) and total time (request → completed), for all jobs, deliveries, services and each unit, plus a list of every completed job. Jobs from earlier days that were never marked completed are flagged.
+- **Service jobs** – book a 🔧 *Service* the same way as a delivery (service person = installation person, helpers optional). When marking a delivery completed you can choose *Service needed later: after 1 week / 15 days / 1 month / … / a date*, and the service is booked automatically with the same customer, address and machine. Completed jobs also have a **🔧 Book service** button.
 - **WhatsApp** button on every delivery to share the team list, **Fairness report** for the admin.
 
 ## Three logins

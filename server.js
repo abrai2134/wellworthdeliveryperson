@@ -11,7 +11,8 @@ const db = () => store.db;
 
 const SESSION_DAYS = 30;
 const COOKIE = 'wd_session';
-const BOOK_AHEAD_DAYS = 90;
+const BOOK_AHEAD_DAYS = 400; // services can be a year ahead
+const TYPES = ['delivery', 'service'];
 
 // ---------- first run: create the admin account ----------
 if (db().admins.length === 0) {
@@ -160,8 +161,21 @@ function deliveryView(d) {
   const lost = db()
     .assignments.filter((a) => a.extra && a.fromDeliveryId === d.id && a.personId)
     .map((a) => ({ person: (db().people.find((p) => p.id === a.personId) || {}).name || '', unit: unitName(a.unitId) }));
+  const parent = d.parentId && db().deliveries.find((x) => x.id === d.parentId);
+  const services = db()
+    .deliveries.filter((x) => x.parentId === d.id && x.status !== 'cancelled')
+    .map((x) => ({ id: x.id, date: x.date, status: x.status }));
   return {
     id: d.id,
+    type: d.type || 'delivery',
+    parentId: d.parentId || null,
+    parent: parent ? { id: parent.id, date: parent.date, type: parent.type || 'delivery' } : null,
+    services,
+    createdAt: d.createdAt || null,
+    startedAt: d.startedAt || null,
+    completedAt: d.completedAt || null,
+    completedBy: d.completedBy || '',
+    completionNote: d.completionNote || '',
     unitId: d.unitId,
     unitName: unitName(d.unitId),
     date: d.date,
@@ -192,9 +206,14 @@ function readDelivery(body, unitId) {
   const installation = body.installation === true || body.installation === 'on' || body.installation === 'yes';
   if (!helpersNeeded && !installation) return { error: 'Ask for at least one helper or an installation person' };
   if (!liveUnit(unitId)) return { error: 'Choose a unit' };
+  const type = TYPES.includes(body.type) ? body.type : 'delivery';
+  let parentId = str(body.parentId) || null;
+  if (parentId && !db().deliveries.some((x) => x.id === parentId && x.unitId === unitId)) parentId = null;
   return {
     value: {
       unitId,
+      type,
+      parentId,
       date,
       session,
       helpersNeeded,
@@ -221,8 +240,9 @@ function createDelivery(body, unitId, by) {
 
 function updateDelivery(d, body) {
   if (d.status === 'cancelled') return { error: 'This delivery was cancelled' };
+  if (d.status === 'done') return { error: 'This job is completed. Reopen it first to change it.' };
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
-  const r = readDelivery(body, d.unitId);
+  const r = readDelivery({ ...body, type: body.type || d.type, parentId: body.parentId === undefined ? d.parentId : body.parentId }, d.unitId);
   if (r.error) return r;
   const oldDate = d.date;
   Object.assign(d, r.value);
@@ -238,10 +258,74 @@ function updateDelivery(d, body) {
 
 function cancelDelivery(d) {
   if (d.status === 'cancelled') return { error: 'Already cancelled' };
+  if (d.status === 'done') return { error: 'This job is already completed' };
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   d.status = 'cancelled';
   db().assignments = db().assignments.filter((a) => a.deliveryId !== d.id);
   S.repairDate(db(), d.date); // people are free again for other deliveries that day
+  store.save();
+  return { value: d };
+}
+
+// The team has left for the job.
+function startDelivery(d, by) {
+  if (!S.isOpen(d)) return { error: 'This job is not open' };
+  if (d.date > today()) return { error: 'This job is on a later day' };
+  d.status = 'started';
+  d.startedAt = new Date().toISOString();
+  d.startedBy = by;
+  store.save();
+  return { value: d };
+}
+
+// Job finished: record the time, free the team for other jobs that day and optionally
+// book a follow-up service visit.
+function completeDelivery(d, body, by) {
+  if (!S.isOpen(d)) return { error: 'This job is not open' };
+  if (d.date > today()) return { error: 'This job is on a later day' };
+  let service = null;
+  const after = str(body.serviceAfter);
+  if (after) {
+    const date = after === 'date' ? str(body.serviceDate) : addDays(today(), parseInt(after, 10) || 0);
+    service = readDelivery(
+      {
+        type: 'service',
+        parentId: d.id,
+        date,
+        session: str(body.serviceSession) || 'FULL',
+        helpersNeeded: body.serviceHelpers !== undefined ? body.serviceHelpers : 0,
+        installation: 'yes',
+        customer: d.customer,
+        customerPhone: d.customerPhone,
+        address: d.address,
+        machine: d.machine,
+        notes: str(body.serviceNotes, 500),
+      },
+      d.unitId
+    );
+    if (service.error) return { error: 'Service: ' + service.error };
+  }
+  d.status = 'done';
+  d.completedAt = new Date().toISOString();
+  d.completedBy = by;
+  d.completionNote = str(body.note, 300);
+  S.repairDate(db(), d.date); // the team is free again for other jobs that day
+  if (service) {
+    const sv = { id: newId('dlv'), ...service.value, status: 'planned', excluded: [], createdBy: by, createdAt: new Date().toISOString() };
+    db().deliveries.push(sv);
+    S.repairDate(db(), sv.date);
+  }
+  store.save();
+  return { value: d };
+}
+
+// Marked completed by mistake: open it again with the same team where possible.
+function reopenDelivery(d) {
+  if (d.status !== 'done' && d.status !== 'started') return { error: 'This job is not completed or started' };
+  d.status = 'planned';
+  d.completedAt = null;
+  d.startedAt = null;
+  S.repairDate(db(), d.date);
   store.save();
   return { value: d };
 }
@@ -267,6 +351,7 @@ function addExtra(d, body, by) {
 
 function cancelExtra(d, body) {
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
+  if (!S.isOpen(d)) return { error: 'This job is completed or cancelled' };
   if (!S.removeExtra(db(), d.id, Number(body.slot))) return { error: 'Nothing to cancel' };
   S.repairDate(db(), d.date);
   store.save();
@@ -275,6 +360,7 @@ function cancelExtra(d, body) {
 
 function replace(d, body) {
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
+  if (!S.isOpen(d)) return { error: 'This job is completed or cancelled' };
   try {
     S.replacePerson(db(), d.id, str(body.personId));
   } catch (e) {
@@ -294,7 +380,7 @@ unit.get('/home', (req, res) => {
   const u = req.user.account;
   const t = today();
   const deliveries = db()
-    .deliveries.filter((d) => d.unitId === u.id && d.date >= addDays(t, -7) && d.status !== 'cancelled')
+    .deliveries.filter((d) => d.unitId === u.id && d.status !== 'cancelled' && (d.date >= addDays(t, -30) || S.isOpen(d)))
     .sort((a, b) => a.date.localeCompare(b.date) || a.session.localeCompare(b.session))
     .map(deliveryView);
   res.json({ today: t, unit: unitView(u), deliveries, defaultHelpers: db().settings.defaultHelpers || 2, bookAhead: BOOK_AHEAD_DAYS });
@@ -312,6 +398,9 @@ unit.post('/deliveries/:id/cancel', (req, res) => { const d = ownDelivery(req, r
 unit.get('/deliveries/:id/people', (req, res) => { const d = ownDelivery(req, res); if (d) res.json({ people: peopleFor(d) }); });
 unit.post('/deliveries/:id/extra', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, addExtra(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/extra/cancel', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, cancelExtra(d, req.body)); });
+unit.post('/deliveries/:id/start', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, startDelivery(d, 'unit')); });
+unit.post('/deliveries/:id/complete', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, completeDelivery(d, req.body, 'unit')); });
+unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
 app.use('/api/unit', unit);
@@ -393,7 +482,22 @@ admin.get('/stats', (req, res) => {
   });
   const deliveries = db().deliveries.filter((d) => d.date >= from && d.date <= to && d.status !== 'cancelled').length;
   const unfilled = list.filter((a) => !a.personId).length;
-  res.json({ from, to, units: units.map((u) => ({ id: u.id, name: u.name })), rows, deliveries, unfilled });
+  const completed = db()
+    .deliveries.filter((d) => d.date >= from && d.date <= to && d.status === 'done')
+    .sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''))
+    .map((d) => ({
+      id: d.id,
+      type: d.type || 'delivery',
+      unitId: d.unitId,
+      unitName: unitName(d.unitId),
+      date: d.date,
+      customer: d.customer || '',
+      createdAt: d.createdAt || null,
+      startedAt: d.startedAt || null,
+      completedAt: d.completedAt || null,
+    }));
+  const pending = db().deliveries.filter((d) => d.date < t && S.isOpen(d)).length;
+  res.json({ from, to, units: units.map((u) => ({ id: u.id, name: u.name })), rows, deliveries, unfilled, completed, pending });
 });
 
 function readUnit(body, existing) {
@@ -536,12 +640,16 @@ admin.post('/deliveries/:id/cancel', (req, res) => { const d = anyDelivery(req, 
 admin.get('/deliveries/:id/people', (req, res) => { const d = anyDelivery(req, res); if (d) res.json({ people: peopleFor(d) }); });
 admin.post('/deliveries/:id/extra', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, addExtra(d, req.body, 'admin')); });
 admin.post('/deliveries/:id/extra/cancel', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, cancelExtra(d, req.body)); });
+admin.post('/deliveries/:id/start', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, startDelivery(d, 'admin')); });
+admin.post('/deliveries/:id/complete', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, completeDelivery(d, req.body, 'admin')); });
+admin.post('/deliveries/:id/reopen', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
 admin.post('/deliveries/:id/assign', (req, res) => {
   const d = anyDelivery(req, res);
   if (!d) return;
   if (d.date < today()) return bad(res, 'Past deliveries cannot be changed');
+  if (!S.isOpen(d)) return bad(res, 'This job is completed or cancelled');
   try {
     S.setManual(db(), d.id, str(req.body.role), Number(req.body.slot), str(req.body.personId));
   } catch (e) {

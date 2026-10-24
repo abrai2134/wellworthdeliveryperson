@@ -180,3 +180,5 @@ dialog .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top
 .print-only { display: none; }
 details summary { cursor: pointer; }
 @media print { .print-only { display: block; } }
+.unit-card.done { border-color: #bfe3cf; background: #fbfefc; }
+button.small { padding: 6px 10px; font-size: .85rem; }

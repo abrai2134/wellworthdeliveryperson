@@ -116,3 +116,22 @@ test('admin change swaps two people', () => {
   assert.equal(S.teamOf(db, d1.id).find((a) => a.slot === x.slot).personId, py);
   assert.equal(S.teamOf(db, d2.id).find((a) => a.slot === y.slot).personId, px);
 });
+
+test('a completed delivery frees its people for another delivery the same day', () => {
+  const db = setup(1, 2, 0); // only 2 helpers
+  const d1 = book(db, 'u1', '2026-07-01', 2, false);
+  const d2 = book(db, 'u1', '2026-07-01', 2, false);
+  assert.equal(S.teamOf(db, d2.id).filter((a) => a.personId).length, 0);
+  d1.status = 'done';
+  S.repairDate(db, '2026-07-01');
+  // the completed delivery keeps its team for the records ...
+  assert.equal(S.teamOf(db, d1.id).filter((a) => a.personId).length, 2);
+  // ... and the same people now go on the next delivery
+  assert.equal(S.teamOf(db, d2.id).filter((a) => a.personId).length, 2);
+  // re-balancing keeps the completed record
+  S.rebalanceFrom(db, '2026-07-01');
+  assert.equal(S.teamOf(db, d1.id).filter((a) => a.personId).length, 2);
+  // the emergency list shows them as free
+  const d3 = book(db, 'u1', '2026-07-01', 1, false, 'PM');
+  assert.ok(S.personStatus(db, d3.id).every((x) => x.status !== 'other' || x.deliveryId !== d1.id));
+});
