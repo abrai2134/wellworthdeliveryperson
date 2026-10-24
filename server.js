@@ -1,4 +1,6 @@
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const { Store, newId } = require('./lib/store');
 const auth = require('./lib/auth');
@@ -37,7 +39,7 @@ function changed() {
 // ---------- app ----------
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '30mb' })); // room for a few photos
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Simple brute-force protection for login.
@@ -179,6 +181,7 @@ function deliveryView(d) {
     completedAt: d.completedAt || null,
     completedBy: d.completedBy || '',
     completionNote: d.completionNote || '',
+    photos: (d.photos || []).map((p) => ({ url: '/api/photos/' + p.file, file: p.file, at: p.at, by: p.by })),
     unitId: d.unitId,
     unitName: unitName(d.unitId),
     date: d.date,
@@ -292,6 +295,48 @@ function startDelivery(d, by) {
 
 // Job finished: record the time, free the team for other jobs that day and optionally
 // book a follow-up service visit.
+// ---------- photos (service book / customer remarks) ----------
+// Saved on the data disk next to db.json; only logged-in users who can see the job can open them.
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const MAX_PHOTOS = 10;
+const PHOTO_NAME = /^[a-z0-9_]+\.(jpg|png|webp)$/;
+
+// Check photos (data: URLs from the browser) before anything is saved.
+function readPhotos(d, list) {
+  const photos = Array.isArray(list) ? list.slice(0, MAX_PHOTOS) : [];
+  if ((d.photos || []).length + photos.length > MAX_PHOTOS) return { error: `A job can have at most ${MAX_PHOTOS} photos` };
+  const out = [];
+  for (const p of photos) {
+    const m = typeof p === 'string' && p.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
+    if (!m) return { error: 'Only photos (JPG / PNG) can be uploaded' };
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 4 * 1024 * 1024) return { error: 'A photo is too big (max 4 MB)' };
+    out.push({ ext: m[1] === 'jpeg' ? 'jpg' : m[1], buf });
+  }
+  return { value: out };
+}
+
+function savePhotos(d, photos, by) {
+  if (!photos.length) return;
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  d.photos = d.photos || [];
+  for (const p of photos) {
+    const file = `${d.id.replace(/[^a-z0-9]/gi, '').toLowerCase()}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${p.ext}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, file), p.buf);
+    d.photos.push({ file, at: new Date().toISOString(), by });
+  }
+}
+
+function addPhotos(d, body, by) {
+  if (d.status === 'cancelled') return { error: 'This job was cancelled' };
+  const r = readPhotos(d, body.photos);
+  if (r.error) return r;
+  if (!r.value.length) return { error: 'Choose a photo' };
+  savePhotos(d, r.value, by);
+  store.save();
+  return { value: d };
+}
+
 function completeDelivery(d, body, by) {
   if (!S.isOpen(d)) return { error: 'This job is not open' };
   if (d.date > today()) return { error: 'This job is on a later day' };
@@ -318,6 +363,9 @@ function completeDelivery(d, body, by) {
     );
     if (service.error) return { error: 'Service: ' + service.error };
   }
+  const photos = readPhotos(d, body.photos);
+  if (photos.error) return photos;
+  savePhotos(d, photos.value, by);
   d.status = 'done';
   d.completedAt = new Date().toISOString();
   d.completedBy = by;
@@ -413,10 +461,25 @@ unit.post('/deliveries/:id/extra', (req, res) => { const d = ownDelivery(req, re
 unit.post('/deliveries/:id/extra/cancel', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, cancelExtra(d, req.body)); });
 unit.post('/deliveries/:id/start', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, startDelivery(d, 'unit')); });
 unit.post('/deliveries/:id/complete', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, completeDelivery(d, req.body, 'unit')); });
+unit.post('/deliveries/:id/photos', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, addPhotos(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
 app.use('/api/unit', unit);
+
+// Open a photo: admin, the job's unit, or a person on that job.
+app.get('/api/photos/:file', (req, res) => {
+  const file = req.params.file;
+  if (!req.user) return res.status(401).json({ error: 'Please log in' });
+  if (!PHOTO_NAME.test(file)) return res.status(404).json({ error: 'Not found' });
+  const d = db().deliveries.find((x) => (x.photos || []).some((p) => p.file === file));
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  const u = req.user;
+  const ok = u.role === 'admin' || (u.role === 'unit' && d.unitId === u.id) || (u.role === 'staff' && db().assignments.some((a) => a.deliveryId === d.id && a.personId === u.id));
+  if (!ok) return res.status(403).json({ error: 'Not allowed' });
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(UPLOAD_DIR, file), (err) => err && !res.headersSent && res.status(404).json({ error: 'Photo file missing' }));
+});
 
 // ---------- client & machine lookup (units and admin) ----------
 function needUnitOrAdmin(req, res, next) {
@@ -693,6 +756,17 @@ admin.post('/deliveries/:id/extra', (req, res) => { const d = anyDelivery(req, r
 admin.post('/deliveries/:id/extra/cancel', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, cancelExtra(d, req.body)); });
 admin.post('/deliveries/:id/start', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, startDelivery(d, 'admin')); });
 admin.post('/deliveries/:id/complete', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, completeDelivery(d, req.body, 'admin')); });
+admin.post('/deliveries/:id/photos', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, addPhotos(d, req.body, 'admin')); });
+admin.post('/deliveries/:id/photos/delete', (req, res) => {
+  const d = anyDelivery(req, res);
+  if (!d) return;
+  const file = str(req.body.file);
+  if (!(d.photos || []).some((p) => p.file === file)) return bad(res, 'Photo not found');
+  d.photos = d.photos.filter((p) => p.file !== file);
+  try { fs.unlinkSync(path.join(UPLOAD_DIR, file)); } catch { /* already gone */ }
+  store.save();
+  res.json({ ok: true });
+});
 admin.post('/deliveries/:id/reopen', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 

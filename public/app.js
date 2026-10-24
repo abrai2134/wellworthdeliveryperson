@@ -241,11 +241,15 @@ function deliveryCard(d, who, today) {
     btns.push(`<button class="small" data-edit-del="${esc(d.id)}">Edit</button>`);
   }
   if (boss && d.status === 'done') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
+  if (boss && d.status !== 'cancelled' && (d.status === 'done' || !(d.date > today))) btns.push(`<button class="small" data-photo="${esc(d.id)}">📷 Add photo</button>`);
   if (who !== 'staff' && d.status !== 'cancelled') btns.push(`<button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>`);
   if (canTeam && d.status === 'planned') btns.push(`<div class="spacer"></div><button class="small danger" data-cancel-del="${esc(d.id)}">Cancel</button>`);
   if (boss && (d.status === 'done' || d.status === 'started')) btns.push(`<div class="spacer"></div><button class="link small" data-reopen="${esc(d.id)}">${d.status === 'done' ? 'Reopen' : 'Undo start'}</button>`);
   const buttons = btns.length ? `<div class="row no-print" style="margin-top:10px">${btns.join('')}</div>` : '';
-  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${team}${lost}${buttons}</div>`;
+  const photos = d.photos && d.photos.length
+    ? `<div class="small" style="margin-top:8px"><b>📒 Service book (${d.photos.length})</b><div class="thumbs">${d.photos.map((p) => `<span class="thumb"><a href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(fmtTime(p.at))}"><img src="${esc(p.url)}" alt="service book photo" loading="lazy"></a>${who === 'admin' ? `<button type="button" data-delphoto="${esc(d.id)}|${esc(p.file)}" title="Delete photo">✕</button>` : ''}</span>`).join('')}</div></div>`
+    : '';
+  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${photos}${team}${lost}${buttons}</div>`;
 }
 
 function waText(d) {
@@ -278,6 +282,24 @@ function bindDeliveryButtons(root, base, list, reload) {
   root.querySelectorAll('[data-reopen]').forEach((b) => (b.onclick = () => {
     if (confirm('Open this job again? Completed / start time is cleared.')) post(`${base}/deliveries/${b.dataset.reopen}/reopen`, 'Opened again');
   }));
+  root.querySelectorAll('[data-photo]').forEach((b) => (b.onclick = () => {
+    const d = find(b.dataset.photo);
+    openModal(`<h2>Add service book photo</h2><div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
+      <div id="p-photos"></div>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Upload</button></div>`,
+    async () => {
+      const photos = getPhotos();
+      if (!photos.length) throw new Error('Choose a photo first');
+      await api(`${base}/deliveries/${d.id}/photos`, { method: 'POST', body: { photos } });
+      toast('Photo saved');
+      reload();
+    });
+    const getPhotos = photoPicker(document.getElementById('p-photos'));
+  }));
+  root.querySelectorAll('[data-delphoto]').forEach((b) => (b.onclick = () => {
+    const [id, file] = b.dataset.delphoto.split('|');
+    if (confirm('Delete this photo?')) post(`${base}/deliveries/${id}/photos/delete`, 'Photo deleted', { file });
+  }));
   root.querySelectorAll('[data-complete]').forEach((b) => (b.onclick = () => completeForm(base, find(b.dataset.complete), reload)));
   root.querySelectorAll('[data-service]').forEach((b) => (b.onclick = () => {
     const p = find(b.dataset.service);
@@ -294,6 +316,47 @@ function bindDeliveryButtons(root, base, list, reload) {
   }));
   root.querySelectorAll('[data-extra]').forEach((b) => (b.onclick = () => askExtra(base, find(b.dataset.extra), reload)));
   root.querySelectorAll('[data-change]').forEach((b) => (b.onclick = () => { const [id, role, slot] = b.dataset.change.split('|'); changePlace(find(id), role, Number(slot)); }));
+}
+
+// Shrink a photo on the phone before upload (max 1600 px, JPEG) so it is quick to send.
+function compressImage(file, max = 1600, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`${file.name} is not a photo`)); };
+    img.src = url;
+  });
+}
+
+// A photo picker (camera or gallery) with previews. Returns a function giving the chosen photos.
+function photoPicker(box) {
+  const photos = [];
+  box.innerHTML = `<label class="btn" style="margin:6px 0;font-weight:500">📷 Take / choose photo<input type="file" accept="image/*" multiple hidden></label>
+    <div class="thumbs"></div>`;
+  const input = box.querySelector('input');
+  const thumbs = box.querySelector('.thumbs');
+  const draw = () => {
+    thumbs.innerHTML = photos.map((p, i) => `<span class="thumb"><img src="${p}" alt=""><button type="button" data-rm="${i}" title="Remove">✕</button></span>`).join('');
+    thumbs.querySelectorAll('[data-rm]').forEach((b) => (b.onclick = () => { photos.splice(Number(b.dataset.rm), 1); draw(); }));
+  };
+  input.onchange = async () => {
+    for (const f of input.files) {
+      if (photos.length >= 10) break;
+      try { photos.push(await compressImage(f)); } catch (ex) { toast(ex.message, true); }
+    }
+    input.value = '';
+    draw();
+  };
+  return () => photos.slice();
 }
 
 async function loadMachineList() {
@@ -314,6 +377,9 @@ function completeForm(base, d, reload) {
   openModal(`<h2>${jobName(d)} completed</h2>
     <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
     <p class="small">The completed time is saved now (${esc(fmtTime(new Date().toISOString()))}) and the team becomes free for other jobs today.</p>
+    <label>📒 Service book photo (customer remarks)</label>
+    <div class="muted small">Take a photo of the page where the customer wrote remarks / signed. You can add more than one.</div>
+    <div id="c-photos"></div>
     <label>Note (optional)</label><input name="note" placeholder="e.g. installed and running, customer signed">
     <label>Service needed later?</label><select name="serviceAfter" id="svc-after">${after.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
     <div id="svc-more" hidden>
@@ -327,10 +393,11 @@ function completeForm(base, d, reload) {
     </div>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Mark completed</button></div>`,
   async (fd) => {
-    await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body: Object.fromEntries(fd) });
+    await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body: { ...Object.fromEntries(fd), photos: getPhotos() } });
     toast(fd.get('serviceAfter') ? 'Completed – service booked' : 'Completed – team is free');
     reload();
   });
+  const getPhotos = photoPicker(document.getElementById('c-photos'));
   const sel = document.getElementById('svc-after');
   sel.onchange = () => {
     document.getElementById('svc-more').hidden = !sel.value;
