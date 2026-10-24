@@ -301,7 +301,9 @@ function bindDeliveryButtons(root, base, list, reload) {
       <p class="muted small">The expense is worked out again from the work time.${base === '/unit' ? ' After saving, only the admin can change these times.' : ''}</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
     async (fd) => {
-      await api(`${base}/deliveries/${d.id}/times`, { method: 'POST', body: { startedAt: toIso(fd.get('startedAt')), completedAt: toIso(fd.get('completedAt')) } });
+      const v = timesValues();
+      if (!v.start || !v.end) throw new Error('Enter the date, start time and end time');
+      await api(`${base}/deliveries/${d.id}/times`, { method: 'POST', body: { startedAt: toIso(v.start), completedAt: toIso(v.end) } });
       toast('Times saved – expense updated');
       reload();
     });
@@ -391,29 +393,54 @@ const localInput = (iso) => { if (!iso) return ''; const x = new Date(iso); x.se
 const toIso = (v) => (v ? new Date(v).toISOString() : '');
 
 // Start / completed time inputs with a live work-time + expense preview.
+// Date + start time + end time (same day; an end time earlier than the start means it ended next day).
 function timesFields(d, startIso, endIso) {
   const people = d.team.filter((t) => t.person).length;
-  return `<div class="form-grid">
-      <div><label>Started at ${startIso ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="datetime-local" name="startedAt" id="t-start" value="${esc(localInput(startIso))}"></div>
-      <div><label>Completed at</label><input type="datetime-local" name="completedAt" id="t-end" value="${esc(localInput(endIso))}"></div>
+  const ref = localInput(endIso || startIso || new Date().toISOString());
+  const st = localInput(startIso);
+  const en = localInput(endIso);
+  return `<div class="form-grid times-grid">
+      <div><label>Date</label><input type="date" id="t-date" value="${esc(ref.slice(0, 10))}" max="${esc(localInput(new Date().toISOString()).slice(0, 10))}"></div>
+      <div><label>Start time ${startIso ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="time" id="t-start" value="${esc(st ? st.slice(11) : '')}"></div>
+      <div><label>End time</label><input type="time" id="t-end" value="${esc(en ? en.slice(11) : '')}"></div>
     </div>
-    <div class="small expense" id="t-prev" data-people="${people}"></div>`;
+    <div class="small expense" id="t-prev" data-people="${people}" data-start="${esc(st)}" data-end="${esc(en)}"></div>`;
+}
+// The typed times as local 'YYYY-MM-DDTHH:MM' strings (end moved to next day if before start).
+function timesValues() {
+  const date = document.getElementById('t-date').value;
+  const a = document.getElementById('t-start').value;
+  const b = document.getElementById('t-end').value;
+  const start = date && a ? `${date}T${a}` : '';
+  let end = date && b ? `${date}T${b}` : '';
+  let nextDay = false;
+  if (start && end && end <= start) { end = localInput(new Date(new Date(end).getTime() + 86400000).toISOString()); nextDay = true; }
+  return { start, end, nextDay };
 }
 function bindTimes() {
-  const a = document.getElementById('t-start');
-  const b = document.getElementById('t-end');
   const box = document.getElementById('t-prev');
   const draw = () => {
-    if (!a.value) { box.innerHTML = '💰 Enter the start time (when the team left) to work out the expense.'; return; }
-    const m = Math.round((new Date(b.value || Date.now()) - new Date(a.value)) / 60000);
-    if (!(m > 0)) { box.innerHTML = '<span class="empty">Start must be before completed</span>'; return; }
+    const v = timesValues();
+    if (!v.start) { box.innerHTML = '💰 Enter the <b>start time</b> (when the team left) to work out the expense.'; return; }
+    if (!v.end) { box.innerHTML = '💰 Enter the <b>end time</b>.'; return; }
+    const m = Math.round((new Date(v.end) - new Date(v.start)) / 60000);
+    if (m > 24 * 60) { box.innerHTML = '<span class="empty">Work time cannot be more than 24 hours</span>'; return; }
     const amt = amountFor(m);
     const n = Number(box.dataset.people) || 0;
-    box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b> → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(String((A0().slabs[0] || {}).fromHours || 3)) + ' h)'}`;
+    box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b>${v.nextDay ? ' <span class="badge warn">ends next day</span>' : ''} → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(String((A0().slabs[0] || {}).fromHours || 3)) + ' h)'}`;
   };
-  a.oninput = draw;
-  b.oninput = draw;
+  ['t-date', 't-start', 't-end'].forEach((id) => (document.getElementById(id).oninput = draw));
   draw();
+}
+// Times to send: only the ones that differ from what was already saved / pressed (to the minute).
+function timesToSend() {
+  const v = timesValues();
+  const box = document.getElementById('t-prev');
+  if (document.getElementById('t-start').value && !v.end) throw new Error('Enter the end time');
+  return {
+    startedAt: v.start && v.start !== box.dataset.start ? toIso(v.start) : '',
+    completedAt: v.end && v.end !== box.dataset.end ? toIso(v.end) : '',
+  };
 }
 
 async function loadMachineList() {
@@ -452,10 +479,7 @@ function completeForm(base, d, reload) {
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Mark completed</button></div>`,
   async (fd) => {
     const body = { ...Object.fromEntries(fd), photos: getPhotos() };
-    const nowLocal = localInput(new Date().toISOString());
-    body.startedAt = body.startedAt && body.startedAt !== localInput(d.startedAt) ? toIso(body.startedAt) : '';
-    // keep "now" (exact) unless the time was changed by hand
-    body.completedAt = body.completedAt && body.completedAt < nowLocal ? toIso(body.completedAt) : '';
+    Object.assign(body, timesToSend());
     await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body });
     toast(fd.get('serviceAfter') ? 'Completed – service booked' : 'Completed – team is free');
     reload();
