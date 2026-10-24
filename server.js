@@ -6,6 +6,7 @@ const { Store, newId } = require('./lib/store');
 const auth = require('./lib/auth');
 const S = require('./lib/scheduler');
 const sheets = require('./lib/sheets');
+const allowance = require('./lib/allowance');
 const { todayIn, addDays, range, isValid } = require('./lib/dates');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -20,6 +21,16 @@ const BOOK_AHEAD_DAYS = 400; // services can be a year ahead
 const TYPES = ['delivery', 'service'];
 
 // ---------- first run: create the admin account ----------
+// ---------- expense allowance ----------
+function teamIds(d) {
+  return [...new Set(db().assignments.filter((a) => a.deliveryId === d.id && a.personId).map((a) => a.personId))];
+}
+function setAllowance(d) {
+  d.allowance = allowance.compute(d, teamIds(d), db().settings.allowance || allowance.DEFAULT);
+}
+// Jobs completed before this feature get their expense worked out once.
+for (const d of db().deliveries) if (d.status === 'done' && !d.allowance) setAllowance(d);
+
 if (db().admins.length === 0) {
   const username = process.env.ADMIN_USERNAME || 'admin';
   const password = process.env.ADMIN_PASSWORD || 'admin123';
@@ -181,6 +192,9 @@ function deliveryView(d) {
     completedAt: d.completedAt || null,
     completedBy: d.completedBy || '',
     completionNote: d.completionNote || '',
+    allowance: d.status === 'done' && d.allowance && d.allowance.applies
+      ? { ...d.allowance, names: d.allowance.people.map((id) => (db().people.find((p) => p.id === id) || {}).name || '?') }
+      : null,
     photos: (d.photos || []).map((p) => ({ url: '/api/photos/' + p.file, file: p.file, at: p.at, by: p.by })),
     unitId: d.unitId,
     unitName: unitName(d.unitId),
@@ -370,6 +384,7 @@ function completeDelivery(d, body, by) {
   d.completedAt = new Date().toISOString();
   d.completedBy = by;
   d.completionNote = str(body.note, 300);
+  setAllowance(d);
   S.repairDate(db(), d.date); // the team is free again for other jobs that day
   if (service) {
     const sv = { id: newId('dlv'), ...service.value, status: 'planned', excluded: [], createdBy: by, createdAt: new Date().toISOString() };
@@ -386,6 +401,7 @@ function reopenDelivery(d) {
   d.status = 'planned';
   d.completedAt = null;
   d.startedAt = null;
+  delete d.allowance;
   S.repairDate(db(), d.date);
   store.save();
   return { value: d };
@@ -537,7 +553,10 @@ app.get('/api/staff/home', need('staff'), (req, res) => {
   const month = t.slice(0, 7);
   const monthDuties = db().assignments.filter((a) => a.personId === p.id && a.date.startsWith(month)).length;
   const leaves = db().leaves.filter((l) => l.personId === p.id && l.to >= t);
-  res.json({ today: t, me: personView(p), jobs, monthDuties, leaves });
+  const monthExpense = db()
+    .deliveries.filter((d) => d.status === 'done' && d.date.startsWith(month) && d.allowance && d.allowance.applies && d.allowance.people.includes(p.id))
+    .reduce((n, d) => n + (d.allowance.perPerson || 0), 0);
+  res.json({ today: t, me: personView(p), jobs, monthDuties, monthExpense, leaves });
 });
 
 // ---------- admin ----------
@@ -609,9 +628,22 @@ admin.get('/stats', (req, res) => {
       createdAt: d.createdAt || null,
       startedAt: d.startedAt || null,
       completedAt: d.completedAt || null,
+      allowance: d.allowance && d.allowance.applies ? d.allowance : null,
     }));
+  // Expense to pay each person for completed jobs in these dates.
+  const pay = {};
+  for (const c of completed) {
+    if (!c.allowance) continue;
+    for (const id of c.allowance.people) {
+      const r = (pay[id] = pay[id] || { personId: id, name: (db().people.find((p) => p.id === id) || {}).name || '?', jobs: 0, paidJobs: 0, amount: 0 });
+      r.jobs++;
+      if (c.allowance.perPerson) { r.paidJobs++; r.amount += c.allowance.perPerson; }
+    }
+  }
+  const expenses = Object.values(pay).sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+  const noStart = completed.filter((c) => c.allowance && c.allowance.minutes == null).length;
   const pending = db().deliveries.filter((d) => d.date < t && S.isOpen(d)).length;
-  res.json({ from, to, units: units.map((u) => ({ id: u.id, name: u.name })), rows, deliveries, unfilled, completed, pending });
+  res.json({ from, to, units: units.map((u) => ({ id: u.id, name: u.name })), rows, deliveries, unfilled, completed, pending, expenses, noStart });
 });
 
 function readUnit(body, existing) {
@@ -767,6 +799,25 @@ admin.post('/deliveries/:id/photos/delete', (req, res) => {
   store.save();
   res.json({ ok: true });
 });
+// Fix start / completed time (e.g. Start was not pressed); the expense is worked out again.
+admin.post('/deliveries/:id/times', (req, res) => {
+  const d = anyDelivery(req, res);
+  if (!d) return;
+  if (d.status !== 'done') return bad(res, 'Only completed jobs');
+  const iso = (v) => { const x = new Date(String(v || '')); return isNaN(x) ? null : x.toISOString(); };
+  const started = req.body.startedAt ? iso(req.body.startedAt) : null;
+  const completed = iso(req.body.completedAt);
+  if (!completed) return bad(res, 'Enter the completed time');
+  if (req.body.startedAt && !started) return bad(res, 'Start time is not valid');
+  if (started && started > completed) return bad(res, 'Start must be before completed');
+  if (completed > new Date(Date.now() + 5 * 60000).toISOString()) return bad(res, 'Completed time cannot be in the future');
+  d.startedAt = started;
+  d.completedAt = completed;
+  d.timesEditedBy = 'admin';
+  setAllowance(d);
+  store.save();
+  res.json({ ok: true });
+});
 admin.post('/deliveries/:id/reopen', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
@@ -803,6 +854,12 @@ admin.put('/settings', (req, res) => {
       s.timezone = str(b.timezone);
     } catch {
       return bad(res, 'Unknown time zone');
+    }
+  }
+  if (b.allowance && typeof b.allowance === 'object') {
+    s.allowance = { appliesTo: b.allowance.appliesTo === 'service' ? 'service' : 'all', slabs: allowance.cleanSlabs(b.allowance.slabs) };
+    if (b.allowance.recalcFrom && isValid(b.allowance.recalcFrom)) {
+      for (const d of db().deliveries) if (d.status === 'done' && d.date >= b.allowance.recalcFrom) setAllowance(d);
     }
   }
   if (b.defaultHelpers !== undefined) s.defaultHelpers = Math.max(0, Math.min(S.MAX_HELPERS, parseInt(b.defaultHelpers, 10) || 2));

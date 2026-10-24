@@ -44,3 +44,20 @@ test('CSV parser handles quotes and new lines', () => {
 test('sheet id from link', () => {
   assert.equal(sh.sheetIdFrom('https://docs.google.com/spreadsheets/d/1yC2zt31TfHyXrGk970gFJMigbU2Dpn0MH19rxXaopnM/edit?gid=1'), '1yC2zt31TfHyXrGk970gFJMigbU2Dpn0MH19rxXaopnM');
 });
+
+const al = require('../lib/allowance');
+test('expense slabs by work time', () => {
+  const slabs = al.DEFAULT.slabs;
+  assert.equal(al.amountFor(179, slabs), 0); // under 3 h
+  assert.equal(al.amountFor(180, slabs), 40); // 3 h
+  assert.equal(al.amountFor(299, slabs), 40);
+  assert.equal(al.amountFor(300, slabs), 55); // 5 h
+  assert.equal(al.amountFor(359, slabs), 55);
+  assert.equal(al.amountFor(360, slabs), 65); // 6 h
+  assert.equal(al.amountFor(479, slabs), 65);
+  assert.equal(al.amountFor(600, slabs), 65); // over 8 h keeps the last slab
+  const d = { type: 'service', startedAt: '2026-10-24T05:00:00Z', completedAt: '2026-10-24T10:30:00Z' };
+  assert.deepEqual(al.compute(d, ['a', 'b']), { applies: true, minutes: 330, perPerson: 55, people: ['a', 'b'], total: 110, note: '' });
+  assert.equal(al.compute({ type: 'delivery' }, ['a'], { appliesTo: 'service', slabs }).applies, false);
+  assert.equal(al.compute({ type: 'service', completedAt: 'x' }, ['a']).note, 'Start time not recorded');
+});

@@ -241,15 +241,24 @@ function deliveryCard(d, who, today) {
     btns.push(`<button class="small" data-edit-del="${esc(d.id)}">Edit</button>`);
   }
   if (boss && d.status === 'done') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
+  if (who === 'admin' && d.status === 'done') btns.push(`<button class="small" data-times="${esc(d.id)}">🕒 Edit times</button>`);
   if (boss && d.status !== 'cancelled' && (d.status === 'done' || !(d.date > today))) btns.push(`<button class="small" data-photo="${esc(d.id)}">📷 Add photo</button>`);
   if (who !== 'staff' && d.status !== 'cancelled') btns.push(`<button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>`);
   if (canTeam && d.status === 'planned') btns.push(`<div class="spacer"></div><button class="small danger" data-cancel-del="${esc(d.id)}">Cancel</button>`);
   if (boss && (d.status === 'done' || d.status === 'started')) btns.push(`<div class="spacer"></div><button class="link small" data-reopen="${esc(d.id)}">${d.status === 'done' ? 'Reopen' : 'Undo start'}</button>`);
   const buttons = btns.length ? `<div class="row no-print" style="margin-top:10px">${btns.join('')}</div>` : '';
+  const al = d.allowance;
+  const expense = al
+    ? `<div class="small expense">💰 <b>Expense:</b> ${al.minutes == null
+        ? `<span class="badge warn">Start time not recorded</span>${who === 'admin' ? ' – use "Edit times"' : ' – admin can fix the times'}`
+        : al.perPerson
+          ? `₹${al.perPerson} per person × ${al.people.length} = <b>₹${al.total}</b> <span class="muted">(${esc(fmtDur(al.minutes * 60000))} work)</span><div class="muted">${al.names.map(esc).join(', ')}</div>`
+          : `nil <span class="muted">(${esc(fmtDur(al.minutes * 60000))} work – under ${esc(String((A0().slabs[0] || {}).fromHours || 3))} h)</span>`}</div>`
+    : '';
   const photos = d.photos && d.photos.length
     ? `<div class="small" style="margin-top:8px"><b>📒 Service book (${d.photos.length})</b><div class="thumbs">${d.photos.map((p) => `<span class="thumb"><a href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(fmtTime(p.at))}"><img src="${esc(p.url)}" alt="service book photo" loading="lazy"></a>${who === 'admin' ? `<button type="button" data-delphoto="${esc(d.id)}|${esc(p.file)}" title="Delete photo">✕</button>` : ''}</span>`).join('')}</div></div>`
     : '';
-  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${photos}${team}${lost}${buttons}</div>`;
+  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${expense}${photos}${team}${lost}${buttons}</div>`;
 }
 
 function waText(d) {
@@ -281,6 +290,23 @@ function bindDeliveryButtons(root, base, list, reload) {
   root.querySelectorAll('[data-start]').forEach((b) => (b.onclick = () => post(`${base}/deliveries/${b.dataset.start}/start`, 'Marked as started – time noted')));
   root.querySelectorAll('[data-reopen]').forEach((b) => (b.onclick = () => {
     if (confirm('Open this job again? Completed / start time is cleared.')) post(`${base}/deliveries/${b.dataset.reopen}/reopen`, 'Opened again');
+  }));
+  root.querySelectorAll('[data-times]').forEach((b) => (b.onclick = () => {
+    const d = find(b.dataset.times);
+    const local = (iso) => { if (!iso) return ''; const x = new Date(iso); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
+    openModal(`<h2>Edit start / completed time</h2><div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
+      <div class="form-grid">
+        <div><label>Started</label><input type="datetime-local" name="startedAt" value="${esc(local(d.startedAt))}"></div>
+        <div><label>Completed *</label><input type="datetime-local" name="completedAt" required value="${esc(local(d.completedAt))}"></div>
+      </div>
+      <p class="muted small">The expense is worked out again from the new work time.</p>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => {
+      const iso = (v) => (v ? new Date(v).toISOString() : '');
+      await api(`/admin/deliveries/${d.id}/times`, { method: 'POST', body: { startedAt: iso(fd.get('startedAt')), completedAt: iso(fd.get('completedAt')) } });
+      toast('Times saved – expense updated');
+      reload();
+    });
   }));
   root.querySelectorAll('[data-photo]').forEach((b) => (b.onclick = () => {
     const d = find(b.dataset.photo);
@@ -358,6 +384,8 @@ function photoPicker(box) {
   };
   return () => photos.slice();
 }
+
+const A0 = () => (state.admin && state.admin.settings.allowance) || { slabs: [{ fromHours: 3 }] };
 
 async function loadMachineList() {
   if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
@@ -617,7 +645,7 @@ async function renderStaff() {
     : `<div class="hero off"><div class="label">Today · ${esc(fmtDate(data.today))}</div><div class="big">${data.leaves.some((l) => l.from <= data.today) ? 'You are on leave' : 'No job today'}</div></div>`;
   const later = data.jobs.filter((j) => j.date > data.today);
   $app.querySelector('.wrap').innerHTML = `${hero}
-    <div class="row section"><h2 style="margin:0">Next jobs</h2><div class="spacer"></div><span class="badge ok">${data.monthDuties} job${data.monthDuties === 1 ? '' : 's'} this month</span></div>
+    <div class="row section"><h2 style="margin:0">Next jobs</h2><div class="spacer"></div><span class="badge ok">${data.monthDuties} job${data.monthDuties === 1 ? '' : 's'} this month</span>${data.monthExpense ? ` <span class="badge w4">💰 ₹${data.monthExpense} expense this month</span>` : ''}</div>
     ${later.length ? `<div class="grid">${later.map((d) => deliveryCard(d, 'staff', data.today)).join('')}</div>` : '<div class="card muted">Nothing planned yet.</div>'}`;
 }
 
@@ -934,6 +962,14 @@ async function adminReport(main) {
   main.innerHTML = `<div class="row section"><h1>Report</h1><div class="spacer"></div>
       <input type="date" id="rf" value="${esc(from)}" style="width:auto"> to <input type="date" id="rt" value="${esc(to)}" style="width:auto"><button id="rgo">Show</button></div>
     ${timeCard}
+    <div class="card section"><h2>💰 Expenses to pay</h2>
+      <div class="muted small">Per person, for jobs completed in these dates, by work time (Start → Completed). Rules are in Settings.${s.noStart ? ` <span class="badge warn">${s.noStart} job(s) without start time – no expense; fix with "Edit times"</span>` : ''}</div>
+      ${s.expenses.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Person</th><th class="num">Completed jobs</th><th class="num">Jobs with expense</th><th class="num">Amount</th></tr></thead><tbody>
+        ${s.expenses.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="num">${r.jobs}</td><td class="num">${r.paidJobs}</td><td class="num"><b>₹${r.amount}</b></td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td></td><td></td><td class="num"><b>₹${s.expenses.reduce((n, r) => n + r.amount, 0)}</b></td></tr></tbody></table></div>
+      <details style="margin-top:8px"><summary class="small"><b>Each job</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Date</th><th>Unit</th><th>Customer</th><th class="num">Work</th><th class="num">Per person</th><th class="num">People</th><th class="num">Total</th></tr></thead><tbody>
+        ${s.completed.filter((c) => c.allowance).map((c) => `<tr><td>${esc(fmtDate(c.date))}${c.type === 'service' ? ' 🔧' : ''}</td><td>${esc(c.unitName)}</td><td>${esc(c.customer)}</td><td class="num">${c.allowance.minutes == null ? '<span class="badge warn">no start</span>' : esc(fmtDur(c.allowance.minutes * 60000))}</td><td class="num">₹${c.allowance.perPerson}</td><td class="num">${c.allowance.people.length}</td><td class="num"><b>₹${c.allowance.total}</b></td></tr>`).join('')}
+      </tbody></table></div></details>` : '<p class="muted">No completed jobs in these dates yet.</p>'}</div>
     <div class="card section"><h2>Fairness</h2>${s.deliveries} jobs.
       <div class="small">Helpers – difference between most and least: <b>${sh}</b> ${ok(sh)}</div>
       <div class="small">Installation persons – difference: <b>${si}</b> ${ok(si)}</div>
@@ -1037,6 +1073,14 @@ function adminSettings(main) {
         <div><label>Default helpers per delivery</label><input name="defaultHelpers" type="number" min="0" max="${state.pub.maxHelpers}" value="${esc(s.defaultHelpers)}"></div>
         <div><label>Time zone</label><input name="timezone" value="${esc(s.timezone)}"></div>
       </div>
+      <h3 style="margin-top:16px">💰 Expense per person (by work time Start → Completed)</h3>
+      <div class="muted small">Each line: from this many hours, pay this amount to each person on the job. Under the first line = nil.</div>
+      <div id="slabs"></div>
+      <button type="button" class="link" id="add-slab">+ Add line</button>
+      <div class="form-grid">
+        <div><label>Pay expense for</label><select name="appliesTo"><option value="all">Deliveries and services</option><option value="service" ${(s.allowance || {}).appliesTo === 'service' ? 'selected' : ''}>Services only</option></select></div>
+        <div><label>Also re-calculate jobs completed from (optional)</label><input type="date" name="recalcFrom"></div>
+      </div>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div>
     </form>
     <form class="card section" id="pw-form"><h2>Admin login</h2>
@@ -1048,12 +1092,25 @@ function adminSettings(main) {
     <div class="card"><h2>Backup</h2><p class="muted">Download all data (units, people, deliveries, history). Keep a copy safe; you can restore it any time.</p>
       <div class="row"><a class="btn" href="/api/admin/backup">⬇️ Download backup</a>
       <label class="btn" style="margin:0;font-weight:500">⬆️ Restore from file<input type="file" id="restore" accept=".json,application/json" hidden></label></div></div>`;
+  const slabsEl = document.getElementById('slabs');
+  const slabRow = (x) => `<div class="row slab" style="margin-top:6px;flex-wrap:nowrap">From <input class="sh" type="number" step="0.5" min="0.5" max="48" value="${esc(x.fromHours)}" style="width:80px"> hours → ₹ <input class="sa" type="number" min="0" value="${esc(x.amount)}" style="width:90px"> <button type="button" class="link danger" title="Remove">✕</button></div>`;
+  const addSlab = (x) => {
+    slabsEl.insertAdjacentHTML('beforeend', slabRow(x));
+    const r = slabsEl.lastElementChild;
+    r.querySelector('button').onclick = () => r.remove();
+  };
+  ((s.allowance && s.allowance.slabs) || []).forEach(addSlab);
+  document.getElementById('add-slab').onclick = () => addSlab({ fromHours: '', amount: '' });
   const sf = document.getElementById('set-form');
   sf.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(sf);
     try {
-      await api('/admin/settings', { method: 'PUT', body: Object.fromEntries(fd) });
+      const slabs = [...document.querySelectorAll('#slabs .slab')].map((r) => ({ fromHours: Number(r.querySelector('.sh').value), amount: Number(r.querySelector('.sa').value) })).filter((x) => x.fromHours > 0);
+      const body = Object.fromEntries(fd);
+      body.allowance = { appliesTo: body.appliesTo, slabs, recalcFrom: body.recalcFrom };
+      delete body.appliesTo; delete body.recalcFrom;
+      await api('/admin/settings', { method: 'PUT', body });
       state.pub.orgName = fd.get('orgName') || state.pub.orgName;
       toast('Settings saved');
       $app.innerHTML = '';

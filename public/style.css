@@ -190,3 +190,4 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .thumb { position: relative; display: inline-block; }
 .thumb img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .thumb button { position: absolute; top: -6px; right: -6px; padding: 0; width: 22px; height: 22px; border-radius: 50%; justify-content: center; font-size: .7rem; background: #fff; color: var(--bad); }
+.expense { margin-top: 8px; padding: 8px 10px; background: #f6f9fd; border-radius: 8px; }
