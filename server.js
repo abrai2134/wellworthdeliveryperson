@@ -21,6 +21,24 @@ const BOOK_AHEAD_DAYS = 400; // services can be a year ahead
 const TYPES = ['delivery', 'service'];
 
 // ---------- first run: create the admin account ----------
+// ---------- start / completed times typed in by hand ----------
+// Checks times a person enters (when they forgot to press Start / Completed).
+function readTimes(d, body, needCompleted) {
+  const iso = (v) => { const x = new Date(String(v || '')); return isNaN(x) ? null : x.toISOString(); };
+  const started = body.startedAt ? iso(body.startedAt) : null;
+  const completed = body.completedAt ? iso(body.completedAt) : null;
+  if (body.startedAt && !started) return { error: 'Start time is not valid' };
+  if (body.completedAt && !completed) return { error: 'Completed time is not valid' };
+  if (needCompleted && !completed) return { error: 'Enter the completed time' };
+  const end = completed || new Date().toISOString();
+  if (started && started >= end) return { error: 'Start must be before completed' };
+  if (end > new Date(Date.now() + 5 * 60000).toISOString()) return { error: 'Completed time cannot be in the future' };
+  const earliest = new Date(Date.parse(d.date + 'T00:00:00Z') - 86400000).toISOString(); // a day before the job date
+  if ((started && started < earliest) || end < earliest) return { error: 'Times must be on or after the job date' };
+  if (started && Date.parse(end) - Date.parse(started) > 24 * 3600000) return { error: 'Work time cannot be more than 24 hours' };
+  return { value: { started, completed } };
+}
+
 // ---------- expense allowance ----------
 function teamIds(d) {
   return [...new Set(db().assignments.filter((a) => a.deliveryId === d.id && a.personId).map((a) => a.personId))];
@@ -192,6 +210,7 @@ function deliveryView(d) {
     completedAt: d.completedAt || null,
     completedBy: d.completedBy || '',
     completionNote: d.completionNote || '',
+    timesEditedBy: d.timesEditedBy || '',
     allowance: d.status === 'done' && d.allowance && d.allowance.applies
       ? { ...d.allowance, names: d.allowance.people.map((id) => (db().people.find((p) => p.id === id) || {}).name || '?') }
       : null,
@@ -377,12 +396,18 @@ function completeDelivery(d, body, by) {
     );
     if (service.error) return { error: 'Service: ' + service.error };
   }
+  const times = readTimes(d, body, false);
+  if (times.error) return times;
   const photos = readPhotos(d, body.photos);
   if (photos.error) return photos;
   savePhotos(d, photos.value, by);
   d.status = 'done';
-  d.completedAt = new Date().toISOString();
+  const pressedStart = d.startedAt;
+  if (times.value.started) d.startedAt = times.value.started;
+  d.completedAt = times.value.completed || new Date().toISOString();
   d.completedBy = by;
+  // Remember when times were typed in rather than pressed live.
+  if (times.value.completed || (times.value.started && times.value.started !== pressedStart)) d.timesEditedBy = by;
   d.completionNote = str(body.note, 300);
   setAllowance(d);
   S.repairDate(db(), d.date); // the team is free again for other jobs that day
@@ -402,7 +427,24 @@ function reopenDelivery(d) {
   d.completedAt = null;
   d.startedAt = null;
   delete d.allowance;
+  delete d.timesEditedBy;
   S.repairDate(db(), d.date);
+  store.save();
+  return { value: d };
+}
+
+// Fix start / completed time of a completed job; the expense is worked out again.
+// Units may only add times when Start was never recorded; the admin can always change them.
+function setTimes(d, body, by) {
+  if (d.status !== 'done') return { error: 'Only completed jobs' };
+  if (by === 'unit' && d.startedAt) return { error: 'Times are already recorded – ask the admin to change them' };
+  const t = readTimes(d, body, true);
+  if (t.error) return t;
+  if (by === 'unit' && !t.value.started) return { error: 'Enter the start time' };
+  d.startedAt = t.value.started;
+  d.completedAt = t.value.completed;
+  d.timesEditedBy = by;
+  setAllowance(d);
   store.save();
   return { value: d };
 }
@@ -460,7 +502,7 @@ unit.get('/home', (req, res) => {
     .deliveries.filter((d) => d.unitId === u.id && d.status !== 'cancelled' && (d.date >= addDays(t, -30) || S.isOpen(d)))
     .sort((a, b) => a.date.localeCompare(b.date) || a.session.localeCompare(b.session))
     .map(deliveryView);
-  res.json({ today: t, unit: unitView(u), deliveries, defaultHelpers: db().settings.defaultHelpers || 2, bookAhead: BOOK_AHEAD_DAYS });
+  res.json({ today: t, unit: unitView(u), deliveries, defaultHelpers: db().settings.defaultHelpers || 2, bookAhead: BOOK_AHEAD_DAYS, allowance: db().settings.allowance });
 });
 
 function ownDelivery(req, res) {
@@ -478,6 +520,7 @@ unit.post('/deliveries/:id/extra/cancel', (req, res) => { const d = ownDelivery(
 unit.post('/deliveries/:id/start', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, startDelivery(d, 'unit')); });
 unit.post('/deliveries/:id/complete', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, completeDelivery(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/photos', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, addPhotos(d, req.body, 'unit')); });
+unit.post('/deliveries/:id/times', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, setTimes(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
@@ -800,24 +843,7 @@ admin.post('/deliveries/:id/photos/delete', (req, res) => {
   res.json({ ok: true });
 });
 // Fix start / completed time (e.g. Start was not pressed); the expense is worked out again.
-admin.post('/deliveries/:id/times', (req, res) => {
-  const d = anyDelivery(req, res);
-  if (!d) return;
-  if (d.status !== 'done') return bad(res, 'Only completed jobs');
-  const iso = (v) => { const x = new Date(String(v || '')); return isNaN(x) ? null : x.toISOString(); };
-  const started = req.body.startedAt ? iso(req.body.startedAt) : null;
-  const completed = iso(req.body.completedAt);
-  if (!completed) return bad(res, 'Enter the completed time');
-  if (req.body.startedAt && !started) return bad(res, 'Start time is not valid');
-  if (started && started > completed) return bad(res, 'Start must be before completed');
-  if (completed > new Date(Date.now() + 5 * 60000).toISOString()) return bad(res, 'Completed time cannot be in the future');
-  d.startedAt = started;
-  d.completedAt = completed;
-  d.timesEditedBy = 'admin';
-  setAllowance(d);
-  store.save();
-  res.json({ ok: true });
-});
+admin.post('/deliveries/:id/times', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, setTimes(d, req.body, 'admin')); });
 admin.post('/deliveries/:id/reopen', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
 admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 

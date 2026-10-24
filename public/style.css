@@ -191,3 +191,22 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .thumb img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .thumb button { position: absolute; top: -6px; right: -6px; padding: 0; width: 22px; height: 22px; border-radius: 50%; justify-content: center; font-size: .7rem; background: #fff; color: var(--bad); }
 .expense { margin-top: 8px; padding: 8px 10px; background: #f6f9fd; border-radius: 8px; }
+.done-list { margin-top: 12px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.done-list.alone { margin-top: 0; }
+.dl-head { padding: 8px 12px; background: #f6faf7; border-bottom: 1px solid var(--line); }
+.done-row { border-bottom: 1px solid var(--line); }
+.done-row:last-child { border-bottom: 0; }
+.done-row > summary { list-style: none; display: flex; gap: 10px; align-items: center; padding: 9px 12px; cursor: pointer; }
+.done-row > summary::-webkit-details-marker { display: none; }
+.done-row > summary:hover { background: #f7fafc; }
+.done-row[open] > summary { background: #f0f6fd; }
+.ok-tick { color: var(--ok); font-weight: 800; flex: none; }
+.dr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dr-main .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dr-side { flex: none; text-align: right; color: var(--muted); }
+.dr-body { padding: 0 10px 10px; }
+.dr-body > .card { border: 0; padding: 4px; background: none; }
+.drv .place { font-size: .75rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.drv .who-line { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.drv .sub-line { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; margin-top: 2px; }
+.drv .sub-line button.link { padding: 2px 0; }

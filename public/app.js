@@ -188,6 +188,7 @@ function timeline(d) {
     const work = fmtDur(durBetween(d.startedAt, d.completedAt));
     const total = fmtDur(durBetween(d.createdAt, d.completedAt));
     parts.push(`<b>Completed ${esc(fmtTime(d.completedAt))}</b>${work || total ? ` (${[work && 'work ' + work, total && 'total ' + total].filter(Boolean).join(' · ')})` : ''}`);
+    if (d.timesEditedBy) parts.push(`<span class="badge manual">✎ times entered by ${esc(d.timesEditedBy)}</span>`);
   }
   return parts.length ? `<div class="small muted" style="margin-top:6px">🕒 ${parts.join(' · ')}</div>` : '';
 }
@@ -211,9 +212,9 @@ function deliveryCard(d, who, today) {
       who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
       p ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent – replace'}</button>` : '',
     ].join('');
-    return `<div class="drv"><div class="row"><span class="small muted" style="width:86px">${esc(placeName(t, d))}</span>
-      ${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${p.unitName ? `<span class="small muted">(${esc(p.unitName)})</span>` : ''} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
-      ${p || actions ? `<div class="row small" style="margin-left:92px">${p ? telLink(p.phone) : ''} ${actions}</div>` : ''}</div>`;
+    return `<div class="drv"><div class="place">${esc(placeName(t, d))}</div>
+      <div class="who-line">${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
+      ${p || actions ? `<div class="sub-line small">${p && p.unitName ? `<span class="muted">${esc(p.unitName)}</span>` : ''}${p && p.phone ? telLink(p.phone) : ''}${actions}</div>` : ''}</div>`;
   }).join('');
   const lost = open && d.lost.length ? `<div class="badge bad" style="margin-top:8px;white-space:normal">⚠ ${d.lost.map((l) => `${esc(l.person)} was taken by ${esc(l.unit)} for an emergency`).join('; ')}</div>` : '';
   const typeTag = d.type === 'service' ? '<span class="badge w3">🔧 Service</span> ' : '';
@@ -242,6 +243,7 @@ function deliveryCard(d, who, today) {
   }
   if (boss && d.status === 'done') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
   if (who === 'admin' && d.status === 'done') btns.push(`<button class="small" data-times="${esc(d.id)}">🕒 Edit times</button>`);
+  if (who === 'unit' && d.status === 'done' && !d.startedAt) btns.push(`<button class="small primary" data-times="${esc(d.id)}">🕒 Add times</button>`);
   if (boss && d.status !== 'cancelled' && (d.status === 'done' || !(d.date > today))) btns.push(`<button class="small" data-photo="${esc(d.id)}">📷 Add photo</button>`);
   if (who !== 'staff' && d.status !== 'cancelled') btns.push(`<button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>`);
   if (canTeam && d.status === 'planned') btns.push(`<div class="spacer"></div><button class="small danger" data-cancel-del="${esc(d.id)}">Cancel</button>`);
@@ -293,20 +295,17 @@ function bindDeliveryButtons(root, base, list, reload) {
   }));
   root.querySelectorAll('[data-times]').forEach((b) => (b.onclick = () => {
     const d = find(b.dataset.times);
-    const local = (iso) => { if (!iso) return ''; const x = new Date(iso); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
-    openModal(`<h2>Edit start / completed time</h2><div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
-      <div class="form-grid">
-        <div><label>Started</label><input type="datetime-local" name="startedAt" value="${esc(local(d.startedAt))}"></div>
-        <div><label>Completed *</label><input type="datetime-local" name="completedAt" required value="${esc(local(d.completedAt))}"></div>
-      </div>
-      <p class="muted small">The expense is worked out again from the new work time.</p>
+    openModal(`<h2>${d.startedAt ? 'Edit' : 'Add'} start / completed time</h2><div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
+      <p class="small">Team forgot to press Start / Completed? Enter when the team left and when the job finished.</p>
+      ${timesFields(d, d.startedAt, d.completedAt)}
+      <p class="muted small">The expense is worked out again from the work time.${base === '/unit' ? ' After saving, only the admin can change these times.' : ''}</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
     async (fd) => {
-      const iso = (v) => (v ? new Date(v).toISOString() : '');
-      await api(`/admin/deliveries/${d.id}/times`, { method: 'POST', body: { startedAt: iso(fd.get('startedAt')), completedAt: iso(fd.get('completedAt')) } });
+      await api(`${base}/deliveries/${d.id}/times`, { method: 'POST', body: { startedAt: toIso(fd.get('startedAt')), completedAt: toIso(fd.get('completedAt')) } });
       toast('Times saved – expense updated');
       reload();
     });
+    bindTimes();
   }));
   root.querySelectorAll('[data-photo]').forEach((b) => (b.onclick = () => {
     const d = find(b.dataset.photo);
@@ -385,7 +384,37 @@ function photoPicker(box) {
   return () => photos.slice();
 }
 
-const A0 = () => (state.admin && state.admin.settings.allowance) || { slabs: [{ fromHours: 3 }] };
+const A0 = () => state.allowance || (state.admin && state.admin.settings.allowance) || { slabs: [{ fromHours: 3, amount: 40 }, { fromHours: 5, amount: 55 }, { fromHours: 6, amount: 65 }] };
+const amountFor = (minutes) => { let a = 0; for (const x of A0().slabs || []) if (minutes >= x.fromHours * 60) a = x.amount; return a; };
+// 'YYYY-MM-DDTHH:MM' in the phone's own time, for <input type="datetime-local">
+const localInput = (iso) => { if (!iso) return ''; const x = new Date(iso); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
+const toIso = (v) => (v ? new Date(v).toISOString() : '');
+
+// Start / completed time inputs with a live work-time + expense preview.
+function timesFields(d, startIso, endIso) {
+  const people = d.team.filter((t) => t.person).length;
+  return `<div class="form-grid">
+      <div><label>Started at ${startIso ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="datetime-local" name="startedAt" id="t-start" value="${esc(localInput(startIso))}"></div>
+      <div><label>Completed at</label><input type="datetime-local" name="completedAt" id="t-end" value="${esc(localInput(endIso))}"></div>
+    </div>
+    <div class="small expense" id="t-prev" data-people="${people}"></div>`;
+}
+function bindTimes() {
+  const a = document.getElementById('t-start');
+  const b = document.getElementById('t-end');
+  const box = document.getElementById('t-prev');
+  const draw = () => {
+    if (!a.value) { box.innerHTML = '💰 Enter the start time (when the team left) to work out the expense.'; return; }
+    const m = Math.round((new Date(b.value || Date.now()) - new Date(a.value)) / 60000);
+    if (!(m > 0)) { box.innerHTML = '<span class="empty">Start must be before completed</span>'; return; }
+    const amt = amountFor(m);
+    const n = Number(box.dataset.people) || 0;
+    box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b> → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(String((A0().slabs[0] || {}).fromHours || 3)) + ' h)'}`;
+  };
+  a.oninput = draw;
+  b.oninput = draw;
+  draw();
+}
 
 async function loadMachineList() {
   if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
@@ -404,7 +433,8 @@ function completeForm(base, d, reload) {
   const after = [['', 'No service needed'], ['7', 'After 1 week'], ['15', 'After 15 days'], ['30', 'After 1 month'], ['60', 'After 2 months'], ['90', 'After 3 months'], ['180', 'After 6 months'], ['365', 'After 1 year'], ['date', 'Choose a date…']];
   openModal(`<h2>${jobName(d)} completed</h2>
     <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
-    <p class="small">The completed time is saved now (${esc(fmtTime(new Date().toISOString()))}) and the team becomes free for other jobs today.</p>
+    <p class="small">The team becomes free for other jobs today. Check the times – change them if Start / Completed was not pressed on time.</p>
+    ${timesFields(d, d.startedAt, new Date().toISOString())}
     <label>📒 Service book photo (customer remarks)</label>
     <div class="muted small">Take a photo of the page where the customer wrote remarks / signed. You can add more than one.</div>
     <div id="c-photos"></div>
@@ -421,11 +451,17 @@ function completeForm(base, d, reload) {
     </div>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Mark completed</button></div>`,
   async (fd) => {
-    await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body: { ...Object.fromEntries(fd), photos: getPhotos() } });
+    const body = { ...Object.fromEntries(fd), photos: getPhotos() };
+    const nowLocal = localInput(new Date().toISOString());
+    body.startedAt = body.startedAt && body.startedAt !== localInput(d.startedAt) ? toIso(body.startedAt) : '';
+    // keep "now" (exact) unless the time was changed by hand
+    body.completedAt = body.completedAt && body.completedAt < nowLocal ? toIso(body.completedAt) : '';
+    await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body });
     toast(fd.get('serviceAfter') ? 'Completed – service booked' : 'Completed – team is free');
     reload();
   });
   const getPhotos = photoPicker(document.getElementById('c-photos'));
+  bindTimes();
   const sel = document.getElementById('svc-after');
   sel.onchange = () => {
     document.getElementById('svc-more').hidden = !sel.value;
@@ -592,10 +628,32 @@ function askExtra(base, d, reload) {
   })();
 }
 
-function groupByDate(list, today, render) {
+// One short line per completed job; tap to open the full card.
+function doneRow(d, who, today) {
+  const al = d.allowance;
+  const team = d.team.filter((t) => t.person).map((t) => t.person.name).join(', ');
+  const work = fmtDur(durBetween(d.startedAt, d.completedAt));
+  const money = !al ? '' : al.minutes == null ? '<span class="badge warn">no start</span>' : al.perPerson ? `<b>₹${al.total}</b>` : '<span class="muted">nil</span>';
+  return `<details class="done-row"><summary>
+      <span class="ok-tick">✓</span>
+      <span class="dr-main"><b>${d.type === 'service' ? '🔧 ' : ''}${esc(d.customer || '(no customer)')}</b>
+        <span class="small muted">${who !== 'unit' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])} · ${esc(team || 'no team')}</span></span>
+      <span class="dr-side small">${work ? esc(work) : ''}${d.photos && d.photos.length ? ' · 📒' + d.photos.length : ''}<br>${money}</span>
+    </summary><div class="dr-body">${deliveryCard(d, who, today)}</div></details>`;
+}
+
+// Open jobs as cards, completed jobs folded into a compact list.
+function jobsBlock(list, who, today) {
+  const open = list.filter((d) => d.status !== 'done');
+  const done = list.filter((d) => d.status === 'done');
+  return `${open.length ? `<div class="grid">${open.map((d) => deliveryCard(d, who, today)).join('')}</div>` : ''}
+    ${done.length ? `<div class="done-list${open.length ? '' : ' alone'}"><div class="small muted dl-head">✓ Completed (${done.length})${done.some((d) => d.allowance && d.allowance.minutes == null) ? ' · <span class="badge warn">times missing</span>' : ''}</div>${done.map((d) => doneRow(d, who, today)).join('')}</div>` : ''}`;
+}
+
+function groupByDate(list, today, who) {
   const dates = [...new Set(list.map((d) => d.date))];
   return dates.map((date) => `<div class="section"><h2>${date === today ? 'Today · ' : ''}${esc(fmtDate(date, { weekday: 'long', day: 'numeric', month: 'long' }))}</h2>
-    <div class="grid">${list.filter((d) => d.date === date).map(render).join('')}</div></div>`).join('');
+    ${jobsBlock(list.filter((d) => d.date === date), who, today)}</div>`).join('');
 }
 
 // ---------- unit view ----------
@@ -608,6 +666,7 @@ async function renderUnit() {
   const t = data.today;
   state.today = t;
   state.defaultHelpers = data.defaultHelpers;
+  state.allowance = data.allowance;
   const all = data.deliveries;
   const pendingPast = all.filter((d) => d.date < t && isOpenJob(d));
   const upcoming = all.filter((d) => d.date >= t);
@@ -621,8 +680,8 @@ async function renderUnit() {
       <div class="line">${upcoming.filter(isOpenJob).length} open${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
       <div class="row"><a class="call" href="#" id="book">+ Book delivery / service</a></div></div>
     ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></div>` : ''}
-    ${upcoming.length ? groupByDate(upcoming, t, (d) => deliveryCard(d, 'unit', t)) : '<div class="card muted">Nothing booked. Tap "Book delivery / service", choose how many helpers and if an installation / service person is needed – the team is picked automatically.</div>'}
-    ${done.length ? `<details class="card"><summary><b>Completed – last 30 days (${done.length})</b></summary><div class="grid" style="margin-top:10px">${done.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></details>` : ''}`;
+    ${upcoming.length ? groupByDate(upcoming, t, 'unit') : '<div class="card muted">Nothing booked. Tap "Book delivery / service", choose how many helpers and if an installation / service person is needed – the team is picked automatically.</div>'}
+    ${done.length ? `<div class="section"><h2>Completed – last 30 days (${done.length})</h2>${done.some((d) => d.allowance && d.allowance.minutes == null) ? '<p class="small"><span class="badge warn">Some jobs have no start time</span> – open them and tap "🕒 Add times" so the expense can be worked out.</p>' : ''}<div class="done-list alone">${done.map((d) => doneRow(d, 'unit', t)).join('')}</div></div>` : ''}`;
   document.getElementById('book').onclick = (e) => { e.preventDefault(); deliveryForm('/unit', null, renderUnit); };
   bindDeliveryButtons(wrap, '/unit', all, renderUnit);
 }
@@ -666,6 +725,7 @@ async function loadAdmin() {
   state.admin = await api('/admin/data' + q);
   state.today = state.admin.today;
   state.defaultHelpers = state.admin.settings.defaultHelpers;
+  state.allowance = state.admin.settings.allowance;
   if (!state.from) { state.from = state.admin.from; state.to = state.admin.to; }
 }
 
@@ -718,7 +778,7 @@ async function adminToday(main) {
       <div class="muted">${todays.length} job${todays.length === 1 ? '' : 's'}${doneCount ? ` · ${doneCount} completed` : ''} · ${busy.size} people out now${openToday.some((d) => d.open) ? ` · <b class="empty">${openToday.reduce((n, d) => n + d.open, 0)} place(s) open</b>` : ''}</div></div>
       <div class="spacer"></div><button class="primary" id="add">+ New job</button></div>
     ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'admin', t)).join('')}</div></div>` : ''}
-    ${todays.length ? `<div class="grid">${todays.map((d) => deliveryCard(d, 'admin', t)).join('')}</div>` : '<div class="card muted">No job today.</div>'}
+    ${todays.length ? jobsBlock(todays, 'admin', t) : '<div class="card muted">No job today.</div>'}
     <div class="card" style="margin-top:12px"><h3>Free now (not on an open job)</h3>
       <div class="small"><b>Helpers:</b> ${free.filter((p) => canDo(p, 'helper')).map(tag).join(' &nbsp; ') || '<span class="muted">none</span>'}</div>
       <div class="small" style="margin-top:4px"><b>Installation / service:</b> ${free.filter((p) => canDo(p, 'installer')).map(tag).join(' &nbsp; ') || '<span class="muted">none</span>'}</div></div>`;
@@ -764,7 +824,7 @@ function adminDeliveries(main) {
       <button id="print">🖨️ Print</button><button id="rebal">↻ Re-balance</button><button class="primary" id="add">+ New job</button></div>
     <h2 class="print-only">${esc(state.pub.orgName)} – ${esc(fmtDate(A().from))} to ${esc(fmtDate(A().to))}</h2>
     <p class="muted small no-print">${list.length} job(s) · ${list.filter((d) => d.status === 'done').length} completed · ${list.filter((d) => d.type === 'service').length} service(s)</p>
-    ${list.length ? groupByDate(list, t, (d) => deliveryCard(d, 'admin', t)) : '<div class="card muted">No jobs match.</div>'}`;
+    ${list.length ? groupByDate(list, t, 'admin') : '<div class="card muted">No jobs match.</div>'}`;
   const go = (from, to) => { state.from = from; state.to = to; renderAdmin(); };
   document.getElementById('prev').onclick = () => go(addDays(state.from, -14), addDays(state.to, -14));
   document.getElementById('next').onclick = () => go(addDays(state.from, 14), addDays(state.to, 14));
