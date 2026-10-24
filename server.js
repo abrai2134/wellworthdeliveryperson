@@ -3,6 +3,7 @@ const express = require('express');
 const { Store, newId } = require('./lib/store');
 const auth = require('./lib/auth');
 const S = require('./lib/scheduler');
+const sheets = require('./lib/sheets');
 const { todayIn, addDays, range, isValid } = require('./lib/dates');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -184,6 +185,7 @@ function deliveryView(d) {
     customerPhone: d.customerPhone || '',
     address: d.address || '',
     machine: d.machine || '',
+    items: d.items || [],
     notes: d.notes || '',
     helpersNeeded: d.helpersNeeded,
     installation: !!d.installation,
@@ -209,10 +211,18 @@ function readDelivery(body, unitId) {
   const type = TYPES.includes(body.type) ? body.type : 'delivery';
   let parentId = str(body.parentId) || null;
   if (parentId && !db().deliveries.some((x) => x.id === parentId && x.unitId === unitId)) parentId = null;
+  // Machines: list of { label, qty }. Older jobs only had a free-text "machine".
+  let items = Array.isArray(body.items) ? body.items : [];
+  items = items
+    .map((i) => ({ label: str(i && i.label, 120), qty: Math.max(1, Math.min(999, parseInt(i && i.qty, 10) || 1)) }))
+    .filter((i) => i.label)
+    .slice(0, 20);
+  const machine = items.length ? items.map((i) => `${i.label} × ${i.qty}`).join(', ').slice(0, 600) : str(body.machine, 120);
   return {
     value: {
       unitId,
       type,
+      items,
       parentId,
       date,
       session,
@@ -221,7 +231,7 @@ function readDelivery(body, unitId) {
       customer: str(body.customer, 120),
       customerPhone: str(body.customerPhone, 30),
       address: str(body.address, 300),
-      machine: str(body.machine, 120),
+      machine,
       notes: str(body.notes, 500),
     },
   };
@@ -299,6 +309,7 @@ function completeDelivery(d, body, by) {
         customerPhone: d.customerPhone,
         address: d.address,
         machine: d.machine,
+        items: d.items || [],
         notes: str(body.serviceNotes, 500),
       },
       d.unitId
@@ -404,6 +415,44 @@ unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, r
 unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body)); });
 
 app.use('/api/unit', unit);
+
+// ---------- client & machine lookup (units and admin) ----------
+function needUnitOrAdmin(req, res, next) {
+  if (!req.user || (req.user.role !== 'unit' && req.user.role !== 'admin')) return res.status(401).json({ error: 'Please log in' });
+  next();
+}
+app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
+  res.json({ clients: sheets.searchClients(db().clients, str(req.query.q, 80), 10) });
+});
+app.get('/api/lookup/machines', needUnitOrAdmin, (req, res) => {
+  res.json({ machines: db().machines.map((m) => m.label) });
+});
+
+// Copy the client and machine lists from the Google Sheet.
+let syncing = null;
+async function syncSheet() {
+  const cfg = db().sheet;
+  if (!cfg.scriptUrl && !cfg.sheetLink) return { error: 'Google Sheet is not connected yet' };
+  if (syncing) return syncing;
+  syncing = (async () => {
+    try {
+      const r = await sheets.fetchTabs(cfg);
+      db().clients = r.clients;
+      if (!r.missingMachineTab) db().machines = r.machines;
+      cfg.lastSync = new Date().toISOString();
+      cfg.lastError = r.missingMachineTab ? `Tab "${cfg.machineTab}" not found – machine list not updated` : '';
+      store.save();
+      return { clients: r.clients.length, machines: db().machines.length, warning: cfg.lastError };
+    } catch (e) {
+      cfg.lastError = e.message;
+      store.save();
+      return { error: e.message };
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
 
 // ---------- staff (helper / installation person) login ----------
 app.get('/api/staff/home', need('staff'), (req, res) => {
@@ -685,6 +734,39 @@ admin.put('/settings', (req, res) => {
   res.json({ ok: true });
 });
 
+admin.get('/sheet', (req, res) => {
+  const c = db().sheet;
+  res.json({
+    ...c,
+    clients: db().clients.length,
+    machines: db().machines.length,
+    sampleClients: db().clients.slice(0, 5),
+    machineList: db().machines.map((m) => m.label),
+  });
+});
+
+admin.put('/sheet', async (req, res) => {
+  const c = db().sheet;
+  const b = req.body;
+  const url = str(b.scriptUrl, 500);
+  if (url && !/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) return bad(res, 'The Apps Script URL should start with https://script.google.com/');
+  c.scriptUrl = url;
+  if (b.key !== undefined && str(b.key, 100)) c.key = str(b.key, 100);
+  c.sheetLink = str(b.sheetLink, 500);
+  c.partyTab = str(b.partyTab, 60) || 'Party';
+  c.machineTab = str(b.machineTab, 60) || 'Machines';
+  store.save();
+  const r = await syncSheet();
+  if (r.error) return bad(res, 'Saved, but sync failed: ' + r.error);
+  res.json({ ok: true, ...r });
+});
+
+admin.post('/sheet/sync', async (req, res) => {
+  const r = await syncSheet();
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r });
+});
+
 admin.post('/password', (req, res) => {
   const a = req.user.account;
   if (!auth.verifyPassword(String(req.body.current || ''), a.passHash)) return bad(res, 'Current password is wrong');
@@ -726,6 +808,10 @@ const PORT = process.env.PORT || 3000;
 if (require.main === module) {
   app.set('trust proxy', 1);
   app.listen(PORT, () => console.log(`Delivery team allocation running on http://localhost:${PORT}`));
+  // Keep the client / machine lists fresh: on start, then every 3 hours.
+  const auto = () => syncSheet().then((r) => r.error && db().sheet.scriptUrl + db().sheet.sheetLink && console.log('Sheet sync:', r.error));
+  setTimeout(auto, 5000);
+  setInterval(auto, 3 * 60 * 60 * 1000);
 }
 
 module.exports = app;

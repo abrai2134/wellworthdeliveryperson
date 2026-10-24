@@ -224,7 +224,7 @@ function deliveryCard(d, who, today) {
   ];
   const info = [
     d.customer ? `👤 <b>${esc(d.customer)}</b> ${telLink(d.customerPhone)}` : d.customerPhone ? `📞 ${telLink(d.customerPhone)}` : '',
-    d.machine ? `⚙️ ${esc(d.machine)}` : '',
+    d.items && d.items.length ? `⚙️ ${d.items.map((i) => `${esc(i.label)} <b>× ${esc(i.qty)}</b>`).join(', ')}` : d.machine ? `⚙️ ${esc(d.machine)}` : '',
     d.address ? `📍 ${esc(d.address)} · <a target="_blank" rel="noopener" href="${mapLink(d.address)}">Map</a>` : '',
     d.notes ? `📝 ${esc(d.notes)}` : '',
     d.completionNote ? `✅ ${esc(d.completionNote)}` : '',
@@ -250,7 +250,7 @@ function deliveryCard(d, who, today) {
 function waText(d) {
   const lines = [`*${state.pub.orgName} – ${jobName(d)} ${fmtDate(d.date)} (${SESSION_NAMES[d.session]})*`, `Unit: ${d.unitName}`];
   if (d.customer) lines.push(`Customer: ${d.customer}${d.customerPhone ? ' (' + d.customerPhone + ')' : ''}`);
-  if (d.machine) lines.push(`Machine: ${d.machine}`);
+  if (d.items && d.items.length) { lines.push('Machines:'); d.items.forEach((i) => lines.push(`  - ${i.label} × ${i.qty}`)); } else if (d.machine) lines.push(`Machine: ${d.machine}`);
   if (d.address) lines.push(`Address: ${d.address}`);
   if (d.notes) lines.push(`Note: ${d.notes}`);
   lines.push('Team:');
@@ -293,6 +293,15 @@ function bindDeliveryButtons(root, base, list, reload) {
   }));
   root.querySelectorAll('[data-extra]').forEach((b) => (b.onclick = () => askExtra(base, find(b.dataset.extra), reload)));
   root.querySelectorAll('[data-change]').forEach((b) => (b.onclick = () => { const [id, role, slot] = b.dataset.change.split('|'); changePlace(find(id), role, Number(slot)); }));
+}
+
+async function loadMachineList() {
+  if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
+  try {
+    state.machineList = (await api('/lookup/machines')).machines;
+    state.machineListAt = Date.now();
+  } catch { state.machineList = state.machineList || []; }
+  return state.machineList;
 }
 
 function helperOptions(n) {
@@ -345,22 +354,83 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
       <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
+    <h3 style="margin:14px 0 0">👤 Customer</h3>
     <div class="form-grid">
-      <div><label>Customer / party name</label><input name="customer" value="${esc(v.customer)}"></div>
+      <div class="lookup"><label>Customer / party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type name, phone or city to search">
+        <div id="f-cust-list" class="lookup-list" hidden></div></div>
       <div><label>Customer phone</label><input name="customerPhone" type="tel" value="${esc(v.customerPhone)}"></div>
-      <div><label>Machine / model</label><input name="machine" value="${esc(v.machine)}" placeholder="e.g. 10 HP screw compressor"></div>
     </div>
     <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
+    <h3 style="margin:14px 0 0">⚙️ Machines</h3>
+    <div class="muted small">Pick from your machine list or type a model. Add one line per model.</div>
+    <div id="f-items"></div>
+    <button type="button" class="link" id="f-add-item">+ Add another model</button>
+    <datalist id="machine-list"></datalist>
     <label id="f-notes-l">Notes</label><input name="notes" value="${esc(v.notes)}" placeholder="e.g. 2nd floor, no lift">
     <p class="muted small">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book'}</button></div>`,
   async (fd) => {
     const body = Object.fromEntries(fd);
+    body.items = readItems();
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
     else await api(`${base}/deliveries`, { method: 'POST', body });
     toast(d ? 'Saved' : 'Booked – team assigned');
     reload();
   });
+  // Machines: one line per model with quantity.
+  const itemsEl = document.getElementById('f-items');
+  const itemRow = (it) => `<div class="row item-row" style="margin-top:6px;flex-wrap:nowrap">
+      <input class="it-label" list="machine-list" placeholder="Machine / model" value="${esc(it.label)}" style="flex:1">
+      <input class="it-qty" type="number" min="1" max="999" value="${esc(it.qty || 1)}" style="width:72px" title="Quantity">
+      <button type="button" class="link danger it-del" title="Remove">✕</button></div>`;
+  const startItems = (v.items && v.items.length ? v.items : v.machine ? [{ label: v.machine, qty: 1 }] : [{ label: '', qty: 1 }]);
+  const addItem = (it) => {
+    itemsEl.insertAdjacentHTML('beforeend', itemRow(it));
+    const r = itemsEl.lastElementChild;
+    r.querySelector('.it-del').onclick = () => { r.remove(); if (!itemsEl.children.length) addItem({ label: '', qty: 1 }); };
+    r.querySelector('.it-label').onkeydown = (e) => { if (e.key === 'Enter') e.preventDefault(); };
+  };
+  startItems.forEach(addItem);
+  document.getElementById('f-add-item').onclick = () => { if (itemsEl.children.length < 20) { addItem({ label: '', qty: 1 }); itemsEl.lastElementChild.querySelector('.it-label').focus(); } };
+  function readItems() {
+    return [...itemsEl.querySelectorAll('.item-row')].map((r) => ({ label: r.querySelector('.it-label').value.trim(), qty: Number(r.querySelector('.it-qty').value) || 1 })).filter((i) => i.label);
+  }
+  loadMachineList().then((list) => {
+    document.getElementById('machine-list').innerHTML = list.map((m) => `<option value="${esc(m)}"></option>`).join('');
+  });
+  // Customer search from the Google Sheet client list.
+  const cust = document.getElementById('f-cust');
+  const custList = document.getElementById('f-cust-list');
+  let timer = null;
+  let found = [];
+  const pick = (c) => {
+    cust.value = c.name;
+    const f = (n) => modalBody.querySelector(`[name=${n}]`);
+    if (c.phone || c.phone2) f('customerPhone').value = c.phone || c.phone2;
+    const addr = [c.address, c.city && !c.address.toUpperCase().includes(c.city.toUpperCase()) ? c.city : ''].filter(Boolean).join(', ');
+    if (addr) f('address').value = addr;
+    custList.hidden = true;
+  };
+  cust.oninput = () => {
+    clearTimeout(timer);
+    const q = cust.value.trim();
+    if (q.length < 2) { custList.hidden = true; return; }
+    timer = setTimeout(async () => {
+      try {
+        found = (await api('/lookup/clients?q=' + encodeURIComponent(q))).clients;
+      } catch { found = []; }
+      custList.innerHTML = found.length
+        ? found.map((c, i) => `<button type="button" data-i="${i}"><b>${esc(c.name)}</b><span class="small muted">${esc([c.city, c.phone].filter(Boolean).join(' · '))}</span></button>`).join('')
+        : '<div class="small muted" style="padding:8px">Not in the client list – just type the details.</div>';
+      custList.hidden = false;
+      custList.querySelectorAll('[data-i]').forEach((b) => (b.onclick = () => pick(found[Number(b.dataset.i)])));
+    }, 200);
+  };
+  cust.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); if (found[0] && !custList.hidden) pick(found[0]); }
+    if (e.key === 'Escape') custList.hidden = true;
+  };
+  cust.onblur = () => setTimeout(() => (custList.hidden = true), 200);
   const type = document.getElementById('f-type');
   const sync = () => {
     const svc = type.value === 'service';
@@ -491,6 +561,7 @@ const TABS = [
   ['people', 'Helpers & installers'],
   ['leaves', 'Leave'],
   ['report', 'Report'],
+  ['sheet', 'Clients & machines'],
   ['settings', 'Settings'],
 ];
 
@@ -517,7 +588,7 @@ async function renderAdmin() {
     return;
   }
   const main = document.getElementById('main');
-  const views = { today: adminToday, deliveries: adminDeliveries, units: adminUnits, people: adminPeople, leaves: adminLeaves, report: adminReport, settings: adminSettings };
+  const views = { today: adminToday, deliveries: adminDeliveries, units: adminUnits, people: adminPeople, leaves: adminLeaves, report: adminReport, sheet: adminSheet, settings: adminSettings };
   await views[state.tab](main);
 }
 
@@ -804,6 +875,87 @@ async function adminReport(main) {
       <td class="num"><b>${r.total}</b></td><td class="num">${r.helper}</td><td class="num">${r.installer}</td><td class="num">${r.emergency}</td><td class="num">${r.leaveDays}</td>${s.units.map((u) => `<td class="num">${heat(r.perUnit[u.id] || 0)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="muted small">Counts include planned future jobs up to the end date. The unit columns show how often each person went on that unit's jobs — an even spread means people are shuffled well across units.</p>`;
   document.getElementById('rgo').onclick = () => { state.repFrom = document.getElementById('rf').value; state.repTo = document.getElementById('rt').value; renderAdmin(); };
+}
+
+// --- Clients & machines (Google Sheet) ---
+const APPS_SCRIPT = `const KEY = 'CHANGE-THIS-TO-A-SECRET';
+
+function doGet(e) {
+  const out = (obj) => ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+  if (!e || !e.parameter || e.parameter.key !== KEY) return out({ error: 'wrong key' });
+  const tabs = String(e.parameter.tabs || 'Party,Machines').split(',').slice(0, 5);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const data = {};
+  tabs.forEach((name) => {
+    const sh = ss.getSheetByName(name.trim());
+    data[name] = sh ? sh.getDataRange().getDisplayValues() : null;
+  });
+  return out(data);
+}`;
+
+async function adminSheet(main) {
+  const s = await api('/admin/sheet');
+  const connected = s.scriptUrl || s.sheetLink;
+  main.innerHTML = `<div class="row section"><div><h1>Clients &amp; machines</h1>
+      <div class="muted small">Copied from your Google Sheet, so units can pick the customer and machines when booking.</div></div>
+      <div class="spacer"></div>${connected ? '<button class="primary" id="sync">↻ Sync now</button>' : ''}</div>
+    <div class="card section">
+      <div class="row"><span class="badge ok">${s.clients} clients</span><span class="badge w4">${s.machines} machine models</span>
+      ${s.lastSync ? `<span class="small muted">Last sync ${esc(fmtTime(s.lastSync))} · syncs again every 3 hours</span>` : '<span class="small muted">Not synced yet</span>'}</div>
+      ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
+      <div class="lookup" style="max-width:480px;margin-top:10px"><label>Test search</label><input id="tq" placeholder="type a party name, phone or city" autocomplete="off"><div id="tres" class="small" style="margin-top:6px"></div></div>
+      ${s.machineList.length ? `<details style="margin-top:10px"><summary class="small"><b>Machine list (${s.machineList.length})</b></summary><div class="small" style="margin-top:6px;columns:2">${s.machineList.map((m) => `<div>${esc(m)}</div>`).join('')}</div></details>` : ''}
+    </div>
+    <form class="card section" id="sheet-form"><h2>Connect your Google Sheet</h2>
+      <p class="small"><b>Recommended (sheet stays private):</b></p>
+      <ol class="small">
+        <li>Open your sheet → <b>Extensions → Apps Script</b>.</li>
+        <li>Delete what is there and paste the code below. Change <code>CHANGE-THIS-TO-A-SECRET</code> to your own secret word (e.g. <code>ww-9x7k2</code>).</li>
+        <li>Click <b>Deploy → New deployment</b> → type <b>Web app</b> → Execute as <b>Me</b>, Who has access <b>Anyone</b> → <b>Deploy</b> → allow access.</li>
+        <li>Copy the <b>Web app URL</b> and paste it below with the same secret word, then Save.</li>
+      </ol>
+      <details><summary class="small"><b>Show Apps Script code</b></summary><textarea readonly id="code" style="min-height:260px;font-family:monospace;font-size:12px">${esc(APPS_SCRIPT)}</textarea><button type="button" id="copy">📋 Copy code</button></details>
+      <div class="form-grid">
+        <div><label>Apps Script web app URL</label><input name="scriptUrl" value="${esc(s.scriptUrl)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
+        <div><label>Secret word ${s.key ? '(saved – leave blank to keep)' : ''}</label><input name="key" autocomplete="off" placeholder="${s.key ? '••••••' : 'same as in the script'}"></div>
+        <div><label>Client tab name</label><input name="partyTab" value="${esc(s.partyTab)}"></div>
+        <div><label>Machine tab name</label><input name="machineTab" value="${esc(s.machineTab)}"></div>
+      </div>
+      <p class="small muted" style="margin-top:12px"><b>Other way:</b> share the sheet as "Anyone with the link can view" and paste the sheet link here (leave the Apps Script URL empty). Anyone with the link could then see the whole sheet.</p>
+      <label>Google Sheet link</label><input name="sheetLink" value="${esc(s.sheetLink)}" placeholder="https://docs.google.com/spreadsheets/d/…">
+      <p class="small muted">Client tab: uses columns PARTY, PARTY ADD, PARTY ADD2, CITY, CELL NO, CELLNO2. Machine tab: uses columns MACHINE and/or MODEL. Other columns are ignored.</p>
+      <div class="actions" style="justify-content:flex-start"><button class="primary">Save &amp; sync</button></div>
+    </form>`;
+  const form = document.getElementById('sheet-form');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button.primary');
+    btn.disabled = true;
+    try {
+      const r = await api('/admin/sheet', { method: 'PUT', body: Object.fromEntries(new FormData(form)) });
+      state.machineList = null;
+      toast(`Synced: ${r.clients} clients, ${r.machines} machines`);
+      adminSheet(main);
+    } catch (ex) { toast(ex.message, true); btn.disabled = false; }
+  };
+  const sync = document.getElementById('sync');
+  if (sync) sync.onclick = async () => {
+    sync.disabled = true;
+    try { const r = await api('/admin/sheet/sync', { method: 'POST' }); state.machineList = null; toast(`Synced: ${r.clients} clients, ${r.machines} machines`); adminSheet(main); } catch (ex) { toast(ex.message, true); sync.disabled = false; }
+  };
+  document.getElementById('copy').onclick = () => {
+    const c = document.getElementById('code');
+    c.select();
+    (navigator.clipboard ? navigator.clipboard.writeText(c.value) : Promise.reject()).then(() => toast('Code copied'), () => { document.execCommand('copy'); toast('Code copied'); });
+  };
+  let t = null;
+  document.getElementById('tq').oninput = (e) => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const r = await api('/lookup/clients?q=' + encodeURIComponent(e.target.value));
+      document.getElementById('tres').innerHTML = r.clients.map((c) => `<div><b>${esc(c.name)}</b> · ${esc(c.phone)} · ${esc([c.address, c.city].filter(Boolean).join(', '))}</div>`).join('') || '<span class="muted">No match</span>';
+    }, 200);
+  };
 }
 
 // --- Settings ---

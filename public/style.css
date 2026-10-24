@@ -182,3 +182,7 @@ details summary { cursor: pointer; }
 @media print { .print-only { display: block; } }
 .unit-card.done { border-color: #bfe3cf; background: #fbfefc; }
 button.small { padding: 6px 10px; font-size: .85rem; }
+.lookup { position: relative; }
+.lookup-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); max-height: 260px; overflow-y: auto; }
+.lookup-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 0; width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; padding: 8px 10px; }
+.lookup-list button:hover { background: #f0f6fd; }
