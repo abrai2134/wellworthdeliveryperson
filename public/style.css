@@ -216,3 +216,7 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .slab span { white-space: nowrap; }
 .more-details { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .more-details > summary { cursor: pointer; }
+.search-bar { display: flex; gap: 8px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; margin-bottom: 14px; }
+.search-bar input { border: 0; padding: 8px 4px; flex: 1; min-width: 0; }
+.search-bar input:focus { outline: none; }
+.search-bar select { width: auto; }

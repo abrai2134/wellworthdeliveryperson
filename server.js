@@ -505,6 +505,33 @@ const send = (res, r) => (r.error ? bad(res, r.error) : res.json({ ok: true, id:
 const unit = express.Router();
 unit.use(need('unit'));
 
+// ---------- search all jobs ----------
+// Matches party, phone, address, models, notes, team names, unit and date (2026-10-24 or 24/10).
+function searchJobs(list, q, type) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+  if (!words.length) return [];
+  const names = Object.fromEntries(db().people.map((p) => [p.id, p.name]));
+  const out = [];
+  for (const d of list) {
+    if (d.status === 'cancelled') continue;
+    if (type && (d.type || 'delivery') !== type) continue;
+    const [y, m, dd] = d.date.split('-');
+    const team = db().assignments.filter((a) => a.deliveryId === d.id && a.personId).map((a) => names[a.personId] || '');
+    const text = [
+      d.customer, d.customerPhone, d.address, d.machine, d.notes, d.completionNote,
+      ...(d.items || []).map((i) => i.label), ...team, unitName(d.unitId),
+      d.date, `${dd}/${m}/${y}`, `${dd}/${m}`, `${+dd}/${+m}`, d.type === 'service' ? 'service' : 'delivery',
+    ].join(' ').toLowerCase();
+    if (words.every((w) => text.includes(w))) out.push(d);
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 60);
+}
+
+unit.get('/search', (req, res) => {
+  const list = searchJobs(db().deliveries.filter((d) => d.unitId === req.user.id), str(req.query.q, 100), str(req.query.type));
+  res.json({ today: today(), results: list.map(deliveryView) });
+});
+
 unit.get('/home', (req, res) => {
   const u = req.user.account;
   const t = today();
@@ -644,6 +671,11 @@ admin.get('/data', (req, res) => {
       .sort((a, b) => a.date.localeCompare(b.date) || a.session.localeCompare(b.session) || unitName(a.unitId).localeCompare(unitName(b.unitId)))
       .map(deliveryView),
   });
+});
+
+admin.get('/search', (req, res) => {
+  const list = searchJobs(db().deliveries, str(req.query.q, 100), str(req.query.type));
+  res.json({ today: today(), results: list.map(deliveryView) });
 });
 
 admin.get('/stats', (req, res) => {

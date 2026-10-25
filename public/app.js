@@ -684,6 +684,43 @@ function groupByDate(list, today, who) {
     ${jobsBlock(list.filter((d) => d.date === date), who, today)}</div>`).join('');
 }
 
+// ---------- search all jobs ----------
+function searchBarHtml() {
+  const q = state.search || { q: '', type: '' };
+  const opt = (v, l) => `<option value="${v}" ${q.type === v ? 'selected' : ''}>${l}</option>`;
+  return `<div class="search-bar no-print"><span>🔍</span>
+      <input id="s-q" type="search" placeholder="Search party, model no., helper, phone, date…" value="${esc(q.q)}" autocomplete="off">
+      <select id="s-type">${opt('', 'All')}${opt('delivery', '🚚 Deliveries')}${opt('service', '🔧 Services')}</select></div>
+    <div id="s-results" hidden></div>`;
+}
+// root: element holding the bar; normal: element with the usual page (hidden while searching)
+function bindSearch(root, base, who, normal, reload) {
+  const input = root.querySelector('#s-q');
+  const type = root.querySelector('#s-type');
+  const box = root.querySelector('#s-results');
+  let timer = null;
+  let seq = 0;
+  const run = async () => {
+    state.search = { q: input.value, type: type.value };
+    const q = input.value.trim();
+    if (q.length < 2) { box.hidden = true; normal.hidden = false; return; }
+    const my = ++seq;
+    try {
+      const r = await api(`${base}/search?q=${encodeURIComponent(q)}&type=${type.value}`);
+      if (my !== seq) return;
+      normal.hidden = true;
+      box.hidden = false;
+      box.innerHTML = `<div class="row section"><b>${r.results.length}${r.results.length === 60 ? '+' : ''} result${r.results.length === 1 ? '' : 's'}</b> for “${esc(q)}”<div class="spacer"></div><button class="small" id="s-clear">✕ Clear search</button></div>
+        ${r.results.length ? groupByDate(r.results, r.today, who) : '<div class="card muted">Nothing found. Try part of the party name or model no.</div>'}`;
+      box.querySelector('#s-clear').onclick = () => { input.value = ''; run(); };
+      bindDeliveryButtons(box, base, r.results, reload);
+    } catch (ex) { toast(ex.message, true); }
+  };
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 300); };
+  type.onchange = run;
+  if (input.value.trim().length >= 2) run();
+}
+
 // ---------- unit view ----------
 async function renderUnit() {
   if (!document.querySelector('.wrap')) {
@@ -703,15 +740,16 @@ async function renderUnit() {
   const todayOpen = todays.filter(isOpenJob).length;
   const open = upcoming.filter(isOpenJob).reduce((n, d) => n + d.open, 0);
   const wrap = $app.querySelector('.wrap');
-  wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
+  wrap.innerHTML = `${searchBarHtml()}<div id="u-normal"><div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
       <div class="big">${todays.length ? `${todays.length} job${todays.length > 1 ? 's' : ''} today${todayOpen < todays.length ? ` · ${todays.length - todayOpen} completed` : ''}` : 'No job today'}</div>
       <div class="line">${upcoming.filter(isOpenJob).length} open${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
       <div class="row"><a class="call" href="#" id="book">+ Book delivery / service</a></div></div>
     ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></div>` : ''}
     ${upcoming.length ? groupByDate(upcoming, t, 'unit') : '<div class="card muted">Nothing booked. Tap "Book delivery / service", choose how many helpers and if an installation / service person is needed – the team is picked automatically.</div>'}
-    ${done.length ? `<div class="section"><h2>Completed – last 30 days (${done.length})</h2>${done.some((d) => d.allowance && d.allowance.minutes == null) ? '<p class="small"><span class="badge warn">Some jobs have no start time</span> – open them and tap "🕒 Add times" so the expense can be worked out.</p>' : ''}<div class="done-list alone">${done.map((d) => doneRow(d, 'unit', t)).join('')}</div></div>` : ''}`;
+    ${done.length ? `<div class="section"><h2>Completed – last 30 days (${done.length})</h2>${done.some((d) => d.allowance && d.allowance.minutes == null) ? '<p class="small"><span class="badge warn">Some jobs have no start time</span> – open them and tap "🕒 Add times" so the expense can be worked out.</p>' : ''}<div class="done-list alone">${done.map((d) => doneRow(d, 'unit', t)).join('')}</div></div>` : ''}</div>`;
   document.getElementById('book').onclick = (e) => { e.preventDefault(); deliveryForm('/unit', null, renderUnit); };
-  bindDeliveryButtons(wrap, '/unit', all, renderUnit);
+  bindDeliveryButtons(document.getElementById('u-normal'), '/unit', all, renderUnit);
+  bindSearch(wrap, '/unit', 'unit', document.getElementById('u-normal'), renderUnit);
 }
 
 // ---------- staff view ----------
@@ -842,7 +880,7 @@ function adminDeliveries(main) {
   const list = A().deliveries.filter((d) => (!f.type || d.type === f.type) &&
     (f.status === 'all' || (f.status === 'active' && d.status !== 'cancelled') || (f.status === 'open' && isOpenJob(d)) || (f.status === 'done' && d.status === 'done') || (f.status === 'cancelled' && d.status === 'cancelled')));
   const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
-  main.innerHTML = `<div class="row section no-print">
+  main.innerHTML = `${searchBarHtml()}<div id="a-normal"><div class="row section no-print">
       <button id="prev">◀ Prev</button><button id="this">Next 2 weeks</button><button id="next">Next ▶</button>
       <input type="date" id="from" value="${esc(A().from)}" style="width:auto"> to <input type="date" id="to" value="${esc(A().to)}" style="width:auto">
       <button id="go">Show</button>
@@ -852,7 +890,7 @@ function adminDeliveries(main) {
       <button id="print">🖨️ Print</button><button id="rebal">↻ Re-balance</button><button class="primary" id="add">+ New job</button></div>
     <h2 class="print-only">${esc(state.pub.orgName)} – ${esc(fmtDate(A().from))} to ${esc(fmtDate(A().to))}</h2>
     <p class="muted small no-print">${list.length} job(s) · ${list.filter((d) => d.status === 'done').length} completed · ${list.filter((d) => d.type === 'service').length} service(s)</p>
-    ${list.length ? groupByDate(list, t, 'admin') : '<div class="card muted">No jobs match.</div>'}`;
+    ${list.length ? groupByDate(list, t, 'admin') : '<div class="card muted">No jobs match.</div>'}</div>`;
   const go = (from, to) => { state.from = from; state.to = to; renderAdmin(); };
   document.getElementById('prev').onclick = () => go(addDays(state.from, -14), addDays(state.to, -14));
   document.getElementById('next').onclick = () => go(addDays(state.from, 14), addDays(state.to, 14));
@@ -872,7 +910,8 @@ function adminDeliveries(main) {
       toast('Teams re-balanced');
       renderAdmin();
     });
-  bindDeliveryButtons(main, '/admin', list, renderAdmin);
+  bindDeliveryButtons(document.getElementById('a-normal'), '/admin', list, renderAdmin);
+  bindSearch(main, '/admin', 'admin', document.getElementById('a-normal'), renderAdmin);
 }
 
 // --- Units ---
