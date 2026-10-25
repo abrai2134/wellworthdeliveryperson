@@ -33,7 +33,8 @@ test('search by name, phone and city', () => {
 
 test('reads the Machines tab with machine + model or model only', () => {
   const m = sh.parseMachines([['SR', 'MACHINE', 'MODEL', 'RATE'], ['1', 'Screw Compressor', 'TP150CH', '1'], ['2', 'Dryer', 'RD20', ''], ['3', 'Screw Compressor', 'TP150CH', '']]);
-  assert.deepEqual(m.map((x) => x.label), ['Dryer – RD20', 'Screw Compressor – TP150CH']);
+  assert.deepEqual(m.map((x) => x.label), ['RD20', 'TP150CH']);
+  assert.equal(m[0].desc, 'Dryer');
   assert.deepEqual(sh.parseMachines([['MODEL'], ['TP150'], ['TP200']]).map((x) => x.label), ['TP150', 'TP200']);
 });
 
@@ -71,6 +72,10 @@ test('delivery expense: under 1 h nil, 1-3 h 35, services unchanged', () => {
 
 test('machine tab with other column titles still works', () => {
   assert.deepEqual(sh.parseMachines([['SR NO', 'MODEL NO.', 'HP', 'RATE'], ['1', 'FT224BK', '10', '1'], ['2', 'FT300', '15', '']]).map((x) => x.label), ['FT224BK', 'FT300']);
-  assert.deepEqual(sh.parseMachines([['Product Name', 'Model Code'], ['Compressor', 'TP150']]).map((x) => x.label), ['Compressor – TP150']);
+  assert.deepEqual(sh.parseMachines([['Product Name', 'Model Code'], ['Compressor', 'TP150']]).map((x) => x.label), ['TP150']);
+  // the real sheet: MODEL1 / MACHINE1 / RATE1 ...
+  const real = sh.parseMachines([['MODEL1', 'MACHINE1', 'RATE1', 'ENTRY BY ', 'w.e.d', 'MIN DAYS', 'MAX DAYS '],
+    ['TP150~C2 (DUAL BAGS & FLAT TYPE HOOD)', 'TWO STN POLISHING MACHINE WITH 1.5HP DC ', '78000', 'ABRAR', '4/1/2026', '15', '18']]);
+  assert.deepEqual(real, [{ machine: 'TWO STN POLISHING MACHINE WITH 1.5HP DC', model: 'TP150~C2 (DUAL BAGS & FLAT TYPE HOOD)', label: 'TP150~C2 (DUAL BAGS & FLAT TYPE HOOD)', desc: 'TWO STN POLISHING MACHINE WITH 1.5HP DC' }]);
   assert.deepEqual(sh.parseMachines([['A', 'B'], ['1', 'Dryer RD20'], ['2', 'TP150']]).map((x) => x.label), ['Dryer RD20', 'TP150']);
 });

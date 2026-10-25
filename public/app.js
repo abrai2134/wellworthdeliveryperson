@@ -448,7 +448,8 @@ function timesToSend() {
 async function loadMachineList() {
   if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
   try {
-    state.machineList = (await api('/lookup/machines')).machines;
+    const r = await api('/lookup/machines');
+    state.machineList = r.details || r.machines.map((label) => ({ label, desc: '' }));
     state.machineListAt = Date.now();
   } catch { state.machineList = state.machineList || []; }
   return state.machineList;
@@ -554,7 +555,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     return [...itemsEl.querySelectorAll('.item-row')].map((r) => ({ label: r.querySelector('.it-label').value.trim(), qty: Number(r.querySelector('.it-qty').value) || 1 })).filter((i) => i.label);
   }
   loadMachineList().then((list) => {
-    document.getElementById('machine-list').innerHTML = list.map((m) => `<option value="${esc(m)}"></option>`).join('');
+    document.getElementById('machine-list').innerHTML = list.map((m) => (typeof m === 'string' ? `<option value="${esc(m)}"></option>` : `<option value="${esc(m.label)}">${esc(m.desc)}</option>`)).join('');
   });
   // Customer search from the Google Sheet client list.
   const cust = document.getElementById('f-cust');

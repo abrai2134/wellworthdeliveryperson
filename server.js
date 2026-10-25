@@ -559,8 +559,13 @@ app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
   res.json({ clients: sheets.searchClients(db().clients, str(req.query.q, 80), 10) });
 });
 app.get('/api/lookup/machines', needUnitOrAdmin, (req, res) => {
-  res.json({ machines: db().machines.map((m) => m.label) });
+  res.json({ machines: db().machines.map((m) => m.label), details: db().machines.map((m) => ({ label: m.label, desc: m.desc || '' })) });
 });
+
+// Lists copied before model names were used on their own: switch them over once.
+for (const m of db().machines) {
+  if (m.model && m.label !== m.model) { m.desc = m.machine && m.machine !== m.model ? m.machine : ''; m.label = m.model; }
+}
 
 // Copy the client and machine lists from the Google Sheet.
 let syncing = null;
@@ -916,7 +921,7 @@ admin.get('/sheet', (req, res) => {
     clients: db().clients.length,
     machines: db().machines.length,
     sampleClients: db().clients.slice(0, 5),
-    machineList: db().machines.map((m) => m.label),
+    machineList: db().machines.map((m) => (m.desc ? `${m.label} — ${m.desc}` : m.label)),
   });
 });
 
