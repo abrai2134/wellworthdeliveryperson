@@ -921,7 +921,7 @@ admin.get('/sheet', (req, res) => {
     clients: db().clients.length,
     machines: db().machines.length,
     sampleClients: db().clients.slice(0, 5),
-    machineList: db().machines.map((m) => (m.desc ? `${m.label} — ${m.desc}` : m.label)),
+    machineList: db().machines.map((m) => m.label),
   });
 });
 

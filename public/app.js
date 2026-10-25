@@ -513,19 +513,19 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
       <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
-    <h3 style="margin:14px 0 0">👤 Customer</h3>
-    <div class="form-grid">
-      <div class="lookup"><label>Customer / party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type name, phone or city to search">
-        <div id="f-cust-list" class="lookup-list" hidden></div></div>
-      <div><label>Customer phone</label><input name="customerPhone" type="tel" value="${esc(v.customerPhone)}"></div>
-    </div>
-    <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
-    <h3 style="margin:14px 0 0">⚙️ Machines</h3>
-    <div class="muted small">Pick from your machine list or type a model. Add one line per model.</div>
+    <div class="lookup" style="margin-top:6px"><label>👤 Party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type party name to search">
+      <div id="f-cust-list" class="lookup-list" hidden></div></div>
+    <label style="margin-bottom:0">⚙️ Model no. <span class="muted small" style="font-weight:400">– one line per model, with quantity</span></label>
     <div id="f-items"></div>
     <button type="button" class="link" id="f-add-item">+ Add another model</button>
     <datalist id="machine-list"></datalist>
-    <label id="f-notes-l">Notes</label><input name="notes" value="${esc(v.notes)}" placeholder="e.g. 2nd floor, no lift">
+    <details class="more-details"><summary class="small"><b>More details (optional)</b> <span class="muted">– phone, address, notes · filled in from the party list</span></summary>
+      <div class="form-grid">
+        <div><label>Phone</label><input name="customerPhone" type="tel" value="${esc(v.customerPhone)}"></div>
+        <div><label id="f-notes-l">Notes</label><input name="notes" value="${esc(v.notes)}" placeholder="e.g. 2nd floor, no lift"></div>
+      </div>
+      <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
+    </details>
     <p class="muted small">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book'}</button></div>`,
   async (fd) => {
@@ -539,7 +539,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   // Machines: one line per model with quantity.
   const itemsEl = document.getElementById('f-items');
   const itemRow = (it) => `<div class="row item-row" style="margin-top:6px;flex-wrap:nowrap">
-      <input class="it-label" list="machine-list" placeholder="Machine / model" value="${esc(it.label)}" style="flex:1">
+      <input class="it-label" list="machine-list" placeholder="Model no." value="${esc(it.label)}" style="flex:1">
       <input class="it-qty" type="number" min="1" max="999" value="${esc(it.qty || 1)}" style="width:72px" title="Quantity">
       <button type="button" class="link danger it-del" title="Remove">✕</button></div>`;
   const startItems = (v.items && v.items.length ? v.items : v.machine ? [{ label: v.machine, qty: 1 }] : [{ label: '', qty: 1 }]);
@@ -555,7 +555,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     return [...itemsEl.querySelectorAll('.item-row')].map((r) => ({ label: r.querySelector('.it-label').value.trim(), qty: Number(r.querySelector('.it-qty').value) || 1 })).filter((i) => i.label);
   }
   loadMachineList().then((list) => {
-    document.getElementById('machine-list').innerHTML = list.map((m) => (typeof m === 'string' ? `<option value="${esc(m)}"></option>` : `<option value="${esc(m.label)}">${esc(m.desc)}</option>`)).join('');
+    document.getElementById('machine-list').innerHTML = list.map((m) => (typeof m === 'string' ? `<option value="${esc(m)}"></option>` : `<option value="${esc(m.label)}"></option>`)).join('');
   });
   // Customer search from the Google Sheet client list.
   const cust = document.getElementById('f-cust');
@@ -596,6 +596,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     document.getElementById('f-inst-l').textContent = svc ? 'Service person (technician) needed?' : 'Installation person needed?';
     document.getElementById('f-date-l').textContent = svc ? 'Service date *' : 'Delivery date *';
     document.getElementById('f-notes-l').textContent = svc ? 'What service?' : 'Notes';
+    if (svc) modalBody.querySelector('.more-details').open = true; // services usually need a note
   };
   type.onchange = () => {
     if (!d && type.value === 'service') {
