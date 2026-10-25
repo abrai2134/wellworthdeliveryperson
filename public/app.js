@@ -182,7 +182,7 @@ function statusBadge(d, today) {
 
 function timeline(d) {
   const parts = [];
-  if (d.createdAt) parts.push(`Requested ${esc(fmtTime(d.createdAt))}${d.createdBy ? ' by ' + esc(d.createdBy) : ''}`);
+  if (d.createdAt) parts.push(`Requested ${esc(fmtTime(d.createdAt))}${d.entryBy ? ` by <b>${esc(d.entryBy)}</b>` : d.createdBy ? ' by ' + esc(d.createdBy) : ''}`);
   if (d.startedAt) parts.push(`Started ${esc(fmtTime(d.startedAt))}`);
   if (d.completedAt) {
     const work = fmtDur(durBetween(d.startedAt, d.completedAt));
@@ -265,6 +265,7 @@ function deliveryCard(d, who, today) {
 
 function waText(d) {
   const lines = [`*${state.pub.orgName} – ${jobName(d)} ${fmtDate(d.date)} (${SESSION_NAMES[d.session]})*`, `Unit: ${d.unitName}`];
+  if (d.entryBy) lines.push(`Entry by: ${d.entryBy}`);
   if (d.customer) lines.push(`Customer: ${d.customer}${d.customerPhone ? ' (' + d.customerPhone + ')' : ''}`);
   if (d.items && d.items.length) { lines.push('Machines:'); d.items.forEach((i) => lines.push(`  - ${i.label} × ${i.qty}`)); } else if (d.machine) lines.push(`Machine: ${d.machine}`);
   if (d.address) lines.push(`Address: ${d.address}`);
@@ -445,6 +446,12 @@ function timesToSend() {
   };
 }
 
+async function loadMakers() {
+  if (state.makers && Date.now() - state.makersAt < 5 * 60 * 1000) return state.makers;
+  try { state.makers = (await api('/lookup/makers')).makers; state.makersAt = Date.now(); } catch { state.makers = state.makers || []; }
+  return state.makers;
+}
+
 async function loadMachineList() {
   if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
   try {
@@ -513,6 +520,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
       <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
+    <div id="f-entry-wrap"><label>✍️ Entry by <span class="muted small" style="font-weight:400">– who is raising this request</span></label><select name="entryBy" id="f-entry"><option value="">Loading names…</option></select></div>
     <div class="lookup" style="margin-top:6px"><label>👤 Party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type party name to search">
       <div id="f-cust-list" class="lookup-list" hidden></div></div>
     <label style="margin-bottom:0">⚙️ Model no. <span class="muted small" style="font-weight:400">– one line per model, with quantity</span></label>
@@ -531,6 +539,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   async (fd) => {
     const body = Object.fromEntries(fd);
     body.items = readItems();
+    if (body.entryBy) localStorageSet('entryBy', body.entryBy);
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
     else await api(`${base}/deliveries`, { method: 'POST', body });
     toast(d ? 'Saved' : 'Booked – team assigned');
@@ -554,6 +563,20 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   function readItems() {
     return [...itemsEl.querySelectorAll('.item-row')].map((r) => ({ label: r.querySelector('.it-label').value.trim(), qty: Number(r.querySelector('.it-qty').value) || 1 })).filter((i) => i.label);
   }
+  // "Entry by" names from the sheet's Made By column; remembers the last one used on this phone.
+  loadMakers().then((names) => {
+    const wrap = document.getElementById('f-entry-wrap');
+    if (!wrap) return;
+    const cur = v.entryBy || (!d && localStorageGet('entryBy')) || '';
+    if (!names.length) {
+      wrap.querySelector('#f-entry').outerHTML = `<input name="entryBy" id="f-entry" value="${esc(cur)}" placeholder="your name">`;
+      return;
+    }
+    const list = cur && !names.some((n) => n.toLowerCase() === cur.toLowerCase()) && d ? [cur, ...names] : names;
+    wrap.querySelector('#f-entry').innerHTML = `<option value="">— choose your name —</option>` +
+      list.map((n) => `<option ${n.toLowerCase() === cur.toLowerCase() ? 'selected' : ''}>${esc(n)}</option>`).join('');
+    wrap.querySelector('#f-entry').required = true;
+  });
   loadMachineList().then((list) => {
     document.getElementById('machine-list').innerHTML = list.map((m) => (typeof m === 'string' ? `<option value="${esc(m)}"></option>` : `<option value="${esc(m.label)}"></option>`)).join('');
   });
@@ -1136,10 +1159,11 @@ async function adminSheet(main) {
       <div class="muted small">Copied from your Google Sheet, so units can pick the customer and machines when booking.</div></div>
       <div class="spacer"></div>${connected ? '<button class="primary" id="sync">↻ Sync now</button>' : ''}</div>
     <div class="card section">
-      <div class="row"><span class="badge ok">${s.clients} clients</span><span class="badge w4">${s.machines} machine models</span>
+      <div class="row"><span class="badge ok">${s.clients} clients</span><span class="badge w4">${s.machines} machine models</span><span class="badge w3">${s.makers} Entry by names</span>
       ${s.lastSync ? `<span class="small muted">Last sync ${esc(fmtTime(s.lastSync))} · syncs again every 3 hours</span>` : '<span class="small muted">Not synced yet</span>'}</div>
       ${s.lastError ? `<div class="error">${esc(s.lastError)}</div>` : ''}
       <div class="lookup" style="max-width:480px;margin-top:10px"><label>Test search</label><input id="tq" placeholder="type a party name, phone or city" autocomplete="off"><div id="tres" class="small" style="margin-top:6px"></div></div>
+      ${s.makerList.length ? `<details style="margin-top:10px"><summary class="small"><b>Entry by names (${s.makerList.length})</b> – from the "${esc(s.makersColumn)}" column of "${esc(s.makersTab)}"</summary><div class="small" style="margin-top:6px">${s.makerList.map(esc).join(' · ')}</div></details>` : ''}
       ${s.machineList.length ? `<details style="margin-top:10px"><summary class="small"><b>Machine list (${s.machineList.length})</b></summary><div class="small" style="margin-top:6px;columns:2">${s.machineList.map((m) => `<div>${esc(m)}</div>`).join('')}</div></details>` : ''}
     </div>
     <form class="card section" id="sheet-form"><h2>Connect your Google Sheet</h2>
@@ -1158,6 +1182,8 @@ async function adminSheet(main) {
         <div><label>Secret word ${s.key ? '(saved – leave blank to keep)' : ''}</label><input name="key" autocomplete="off" placeholder="${s.key ? '••••••' : 'same as in the script'}"></div>
         <div><label>Client tab name</label><input name="partyTab" value="${esc(s.partyTab)}"></div>
         <div><label>Machine tab name</label><input name="machineTab" value="${esc(s.machineTab)}"></div>
+        <div><label>"Entry by" tab name</label><input name="makersTab" value="${esc(s.makersTab)}" placeholder="empty = type names freely"></div>
+        <div><label>"Entry by" column</label><input name="makersColumn" value="${esc(s.makersColumn)}"></div>
       </div>
       <p class="small muted" style="margin-top:12px"><b>Other way:</b> share the sheet as "Anyone with the link can view" and paste the sheet link here (leave the Apps Script URL empty). Anyone with the link could then see the whole sheet.</p>
       <label>Google Sheet link</label><input name="sheetLink" value="${esc(s.sheetLink)}" placeholder="https://docs.google.com/spreadsheets/d/…">
@@ -1172,14 +1198,15 @@ async function adminSheet(main) {
     try {
       const r = await api('/admin/sheet', { method: 'PUT', body: Object.fromEntries(new FormData(form)) });
       state.machineList = null;
-      toast(`Synced: ${r.clients} clients, ${r.machines} machines`);
+      toast(`Synced: ${r.clients} clients, ${r.machines} machines, ${r.makers} names`);
+      state.makers = null;
       adminSheet(main);
     } catch (ex) { toast(ex.message, true); btn.disabled = false; }
   };
   const sync = document.getElementById('sync');
   if (sync) sync.onclick = async () => {
     sync.disabled = true;
-    try { const r = await api('/admin/sheet/sync', { method: 'POST' }); state.machineList = null; toast(`Synced: ${r.clients} clients, ${r.machines} machines`); adminSheet(main); } catch (ex) { toast(ex.message, true); sync.disabled = false; }
+    try { const r = await api('/admin/sheet/sync', { method: 'POST' }); state.machineList = null; state.makers = null; toast(`Synced: ${r.clients} clients, ${r.machines} machines, ${r.makers} names`); adminSheet(main); } catch (ex) { toast(ex.message, true); sync.disabled = false; }
   };
   document.getElementById('sid-link').oninput = (e) => { document.getElementById('code').value = appsScriptCode(sheetIdOf(e.target.value)); };
   document.getElementById('copy').onclick = () => {

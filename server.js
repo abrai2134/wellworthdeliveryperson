@@ -229,6 +229,7 @@ function deliveryView(d) {
     unitName: unitName(d.unitId),
     date: d.date,
     session: d.session,
+    entryBy: d.entryBy || '',
     customer: d.customer || '',
     customerPhone: d.customerPhone || '',
     address: d.address || '',
@@ -245,7 +246,7 @@ function deliveryView(d) {
   };
 }
 
-function readDelivery(body, unitId) {
+function readDelivery(body, unitId, opts = {}) {
   const t = today();
   const date = str(body.date);
   if (!isValid(date)) return { error: 'Choose a delivery date' };
@@ -266,10 +267,18 @@ function readDelivery(body, unitId) {
     .filter((i) => i.label)
     .slice(0, 20);
   const machine = items.length ? items.map((i) => `${i.label} × ${i.qty}`).join(', ').slice(0, 600) : str(body.machine, 120);
+  // "Entry by": who raised the request. Must be a name from the sheet's "Made By" column when that list exists.
+  let entryBy = str(body.entryBy, 80);
+  if (db().makers.length && !(opts.lenientEntry && !entryBy)) {
+    const hit = db().makers.find((n) => n.toLowerCase() === entryBy.toLowerCase());
+    if (!hit) return { error: entryBy ? `"${entryBy}" is not in the Made By list – choose a name from the list` : 'Choose who is raising this request (Entry by)' };
+    entryBy = hit;
+  }
   return {
     value: {
       unitId,
       type,
+      entryBy,
       items,
       parentId,
       date,
@@ -400,9 +409,11 @@ function completeDelivery(d, body, by) {
         address: d.address,
         machine: d.machine,
         items: d.items || [],
+        entryBy: d.entryBy || '',
         notes: str(body.serviceNotes, 500),
       },
-      d.unitId
+      d.unitId,
+      { lenientEntry: true } // older jobs may have no "Entry by"
     );
     if (service.error) return { error: 'Service: ' + service.error };
   }
@@ -518,7 +529,7 @@ function searchJobs(list, q, type) {
     const [y, m, dd] = d.date.split('-');
     const team = db().assignments.filter((a) => a.deliveryId === d.id && a.personId).map((a) => names[a.personId] || '');
     const text = [
-      d.customer, d.customerPhone, d.address, d.machine, d.notes, d.completionNote,
+      d.customer, d.customerPhone, d.address, d.machine, d.notes, d.completionNote, d.entryBy,
       ...(d.items || []).map((i) => i.label), ...team, unitName(d.unitId),
       d.date, `${dd}/${m}/${y}`, `${dd}/${m}`, `${+dd}/${+m}`, d.type === 'service' ? 'service' : 'delivery',
     ].join(' ').toLowerCase();
@@ -585,6 +596,9 @@ function needUnitOrAdmin(req, res, next) {
 app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
   res.json({ clients: sheets.searchClients(db().clients, str(req.query.q, 80), 10) });
 });
+app.get('/api/lookup/makers', needUnitOrAdmin, (req, res) => {
+  res.json({ makers: db().makers });
+});
 app.get('/api/lookup/machines', needUnitOrAdmin, (req, res) => {
   res.json({ machines: db().machines.map((m) => m.label), details: db().machines.map((m) => ({ label: m.label, desc: m.desc || '' })) });
 });
@@ -605,12 +619,15 @@ async function syncSheet() {
       const r = await sheets.fetchTabs(cfg);
       db().clients = r.clients;
       if (!r.missingMachineTab) db().machines = r.machines;
+      if (r.makers) db().makers = r.makers;
       cfg.lastSync = new Date().toISOString();
-      cfg.lastError = r.machineError
-        ? `Clients updated. Machine list not updated: ${r.machineError}. Columns found: ${r.machineHeader.join(', ') || 'none'}`
-        : r.missingMachineTab ? `Clients updated. Tab "${cfg.machineTab}" not found – machine list not updated` : '';
+      const problems = [];
+      if (r.machineError) problems.push(`Machine list not updated: ${r.machineError}. Columns found: ${r.machineHeader.join(', ') || 'none'}`);
+      else if (r.missingMachineTab) problems.push(`Tab "${cfg.machineTab}" not found – machine list not updated`);
+      if (r.makersError) problems.push(`"Entry by" names not updated: ${r.makersError}`);
+      cfg.lastError = problems.length ? 'Clients updated. ' + problems.join(' · ') : '';
       store.save();
-      return { clients: r.clients.length, machines: db().machines.length, warning: cfg.lastError };
+      return { clients: r.clients.length, machines: db().machines.length, makers: db().makers.length, warning: cfg.lastError };
     } catch (e) {
       cfg.lastError = e.message;
       store.save();
@@ -954,6 +971,8 @@ admin.get('/sheet', (req, res) => {
     machines: db().machines.length,
     sampleClients: db().clients.slice(0, 5),
     machineList: db().machines.map((m) => m.label),
+    makers: db().makers.length,
+    makerList: db().makers,
   });
 });
 
@@ -967,6 +986,8 @@ admin.put('/sheet', async (req, res) => {
   c.sheetLink = str(b.sheetLink, 500);
   c.partyTab = str(b.partyTab, 60) || 'Party';
   c.machineTab = str(b.machineTab, 60) || 'Machines';
+  if (b.makersTab !== undefined) c.makersTab = str(b.makersTab, 60); // empty = no "Entry by" list
+  if (b.makersColumn !== undefined) c.makersColumn = str(b.makersColumn, 60) || 'Made By';
   store.save();
   const r = await syncSheet();
   if (r.error) return bad(res, 'Saved, but sync failed: ' + r.error);

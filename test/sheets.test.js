@@ -79,3 +79,10 @@ test('machine tab with other column titles still works', () => {
   assert.deepEqual(real, [{ machine: 'TWO STN POLISHING MACHINE WITH 1.5HP DC', model: 'TP150~C2 (DUAL BAGS & FLAT TYPE HOOD)', label: 'TP150~C2 (DUAL BAGS & FLAT TYPE HOOD)', desc: 'TWO STN POLISHING MACHINE WITH 1.5HP DC' }]);
   assert.deepEqual(sh.parseMachines([['A', 'B'], ['1', 'Dryer RD20'], ['2', 'TP150']]).map((x) => x.label), ['Dryer RD20', 'TP150']);
 });
+
+test('Entry by names from the Made By column, most recent first', () => {
+  const rows = [['ID', 'HEADING ', 'M/S', 'M/S ADD', 'BANK DETAILS', 'Made By ', 'STD FILE'],
+    ['1', '', '', '', '', 'ABRAR', ''], ['2', '', '', '', '', 'SHAILESH', ''], ['3', '', '', '', '', 'sandhya ', ''], ['4', '', '', '', '', 'Abrar', ''], ['5', '', '', '', '', '', '']];
+  assert.deepEqual(sh.parseMakers(rows), ['Abrar', 'sandhya', 'SHAILESH']);
+  assert.throws(() => sh.parseMakers([['A', 'B'], ['1', '2']]), /Made By/);
+});
