@@ -270,6 +270,7 @@ function readDelivery(body, unitId, opts = {}) {
   const machine = items.length ? items.map((i) => `${i.label} × ${i.qty}`).join(', ').slice(0, 600) : str(body.machine, 120);
   // "Entry by": who raised the request. Must be a name from the sheet's "Made By" column when that list exists.
   let entryBy = str(body.entryBy, 80);
+  if (!entryBy && !opts.lenientEntry) return { error: 'Choose who is raising this request (Entry by)' };
   if (db().makers.length && !(opts.lenientEntry && !entryBy)) {
     const hit = db().makers.find((n) => n.toLowerCase() === entryBy.toLowerCase());
     if (!hit) return { error: entryBy ? `"${entryBy}" is not in the Made By list – choose a name from the list` : 'Choose who is raising this request (Entry by)' };

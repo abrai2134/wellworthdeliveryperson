@@ -520,7 +520,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
       <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
-    <div id="f-entry-wrap"><label>✍️ Entry by <span class="muted small" style="font-weight:400">– who is raising this request</span></label><select name="entryBy" id="f-entry"><option value="">Loading names…</option></select></div>
+    <div id="f-entry-wrap"><label>✍️ Entry by * <span class="muted small" style="font-weight:400">– who is raising this request</span></label><select name="entryBy" id="f-entry"><option value="">Loading names…</option></select></div>
     <div class="lookup" style="margin-top:6px"><label>👤 Party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type party name to search">
       <div id="f-cust-list" class="lookup-list" hidden></div></div>
     <label style="margin-bottom:0">⚙️ Model no. <span class="muted small" style="font-weight:400">– one line per model, with quantity</span></label>
@@ -539,7 +539,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   async (fd) => {
     const body = Object.fromEntries(fd);
     body.items = readItems();
-    if (body.entryBy) localStorageSet('entryBy', body.entryBy);
+    if (!String(body.entryBy || '').trim()) throw new Error('Choose your name in "Entry by"');
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
     else await api(`${base}/deliveries`, { method: 'POST', body });
     toast(d ? 'Saved' : 'Booked – team assigned');
@@ -567,9 +567,9 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   loadMakers().then((names) => {
     const wrap = document.getElementById('f-entry-wrap');
     if (!wrap) return;
-    const cur = v.entryBy || (!d && localStorageGet('entryBy')) || '';
+    const cur = v.entryBy || ''; // new jobs: everyone picks their own name (unit logins are shared)
     if (!names.length) {
-      wrap.querySelector('#f-entry').outerHTML = `<input name="entryBy" id="f-entry" value="${esc(cur)}" placeholder="your name">`;
+      wrap.querySelector('#f-entry').outerHTML = `<input name="entryBy" id="f-entry" value="${esc(cur)}" placeholder="your name" required>`;
       return;
     }
     const list = cur && !names.some((n) => n.toLowerCase() === cur.toLowerCase()) && d ? [cur, ...names] : names;
