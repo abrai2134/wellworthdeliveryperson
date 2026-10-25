@@ -68,3 +68,9 @@ test('delivery expense: under 1 h nil, 1-3 h 35, services unchanged', () => {
   assert.deepEqual([59, 60, 100, 179, 180, 300, 360, 600].map(del), [0, 35, 35, 35, 40, 55, 65, 65]);
   assert.deepEqual([59, 60, 100, 179, 180].map(svc), [0, 0, 0, 0, 40]);
 });
+
+test('machine tab with other column titles still works', () => {
+  assert.deepEqual(sh.parseMachines([['SR NO', 'MODEL NO.', 'HP', 'RATE'], ['1', 'FT224BK', '10', '1'], ['2', 'FT300', '15', '']]).map((x) => x.label), ['FT224BK', 'FT300']);
+  assert.deepEqual(sh.parseMachines([['Product Name', 'Model Code'], ['Compressor', 'TP150']]).map((x) => x.label), ['Compressor – TP150']);
+  assert.deepEqual(sh.parseMachines([['A', 'B'], ['1', 'Dryer RD20'], ['2', 'TP150']]).map((x) => x.label), ['Dryer RD20', 'TP150']);
+});

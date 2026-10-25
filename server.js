@@ -574,7 +574,9 @@ async function syncSheet() {
       db().clients = r.clients;
       if (!r.missingMachineTab) db().machines = r.machines;
       cfg.lastSync = new Date().toISOString();
-      cfg.lastError = r.missingMachineTab ? `Tab "${cfg.machineTab}" not found – machine list not updated` : '';
+      cfg.lastError = r.machineError
+        ? `Clients updated. Machine list not updated: ${r.machineError}. Columns found: ${r.machineHeader.join(', ') || 'none'}`
+        : r.missingMachineTab ? `Clients updated. Tab "${cfg.machineTab}" not found – machine list not updated` : '';
       store.save();
       return { clients: r.clients.length, machines: db().machines.length, warning: cfg.lastError };
     } catch (e) {
