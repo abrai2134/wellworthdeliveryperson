@@ -212,3 +212,5 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .drv .sub-line button.link { padding: 2px 0; }
 .form-grid.times-grid { grid-template-columns: 1.3fr 1fr 1fr; }
 @media (max-width: 420px) { .form-grid.times-grid { grid-template-columns: 1fr 1fr; } .form-grid.times-grid > div:first-child { grid-column: 1 / -1; } }
+.slab-grid { display: grid; gap: 0 32px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.slab span { white-space: nowrap; }

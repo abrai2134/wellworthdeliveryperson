@@ -48,6 +48,16 @@ function setAllowance(d) {
 }
 // Jobs completed before this feature get their expense worked out once.
 for (const d of db().deliveries) if (d.status === 'done' && !d.allowance) setAllowance(d);
+// Deliveries got their own slabs (under 1 h nil, 1–3 h ₹35, then as before): add them once
+// and work out completed deliveries again with the new rule.
+{
+  const a = db().settings.allowance || (db().settings.allowance = { ...allowance.DEFAULT });
+  if (!a.deliverySlabs) {
+    a.deliverySlabs = allowance.DEFAULT.deliverySlabs.map((x) => ({ ...x }));
+    for (const d of db().deliveries) if (d.status === 'done' && d.type !== 'service') setAllowance(d);
+    store.save();
+  }
+}
 
 if (db().admins.length === 0) {
   const username = process.env.ADMIN_USERNAME || 'admin';
@@ -883,7 +893,11 @@ admin.put('/settings', (req, res) => {
     }
   }
   if (b.allowance && typeof b.allowance === 'object') {
-    s.allowance = { appliesTo: b.allowance.appliesTo === 'service' ? 'service' : 'all', slabs: allowance.cleanSlabs(b.allowance.slabs) };
+    s.allowance = {
+      appliesTo: b.allowance.appliesTo === 'service' ? 'service' : 'all',
+      slabs: allowance.cleanSlabs(b.allowance.slabs),
+      deliverySlabs: allowance.cleanSlabs(b.allowance.deliverySlabs !== undefined ? b.allowance.deliverySlabs : (s.allowance || {}).deliverySlabs),
+    };
     if (b.allowance.recalcFrom && isValid(b.allowance.recalcFrom)) {
       for (const d of db().deliveries) if (d.status === 'done' && d.date >= b.allowance.recalcFrom) setAllowance(d);
     }

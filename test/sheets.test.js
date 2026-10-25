@@ -61,3 +61,10 @@ test('expense slabs by work time', () => {
   assert.equal(al.compute({ type: 'delivery' }, ['a'], { appliesTo: 'service', slabs }).applies, false);
   assert.equal(al.compute({ type: 'service', completedAt: 'x' }, ['a']).note, 'Start time not recorded');
 });
+
+test('delivery expense: under 1 h nil, 1-3 h 35, services unchanged', () => {
+  const del = (min) => al.compute({ type: 'delivery', startedAt: '2026-10-24T00:00:00Z', completedAt: new Date(Date.parse('2026-10-24T00:00:00Z') + min * 60000).toISOString() }, ['a']).perPerson;
+  const svc = (min) => al.compute({ type: 'service', startedAt: '2026-10-24T00:00:00Z', completedAt: new Date(Date.parse('2026-10-24T00:00:00Z') + min * 60000).toISOString() }, ['a']).perPerson;
+  assert.deepEqual([59, 60, 100, 179, 180, 300, 360, 600].map(del), [0, 35, 35, 35, 40, 55, 65, 65]);
+  assert.deepEqual([59, 60, 100, 179, 180].map(svc), [0, 0, 0, 0, 40]);
+});

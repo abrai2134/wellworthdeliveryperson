@@ -255,7 +255,7 @@ function deliveryCard(d, who, today) {
         ? `<span class="badge warn">Start time not recorded</span>${who === 'admin' ? ' – use "Edit times"' : ' – admin can fix the times'}`
         : al.perPerson
           ? `₹${al.perPerson} per person × ${al.people.length} = <b>₹${al.total}</b> <span class="muted">(${esc(fmtDur(al.minutes * 60000))} work)</span><div class="muted">${al.names.map(esc).join(', ')}</div>`
-          : `nil <span class="muted">(${esc(fmtDur(al.minutes * 60000))} work – under ${esc(String((A0().slabs[0] || {}).fromHours || 3))} h)</span>`}</div>`
+          : `nil <span class="muted">(${esc(fmtDur(al.minutes * 60000))} work – under ${esc(firstHours(d.type))} h)</span>`}</div>`
     : '';
   const photos = d.photos && d.photos.length
     ? `<div class="small" style="margin-top:8px"><b>📒 Service book (${d.photos.length})</b><div class="thumbs">${d.photos.map((p) => `<span class="thumb"><a href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(fmtTime(p.at))}"><img src="${esc(p.url)}" alt="service book photo" loading="lazy"></a>${who === 'admin' ? `<button type="button" data-delphoto="${esc(d.id)}|${esc(p.file)}" title="Delete photo">✕</button>` : ''}</span>`).join('')}</div></div>`
@@ -387,7 +387,9 @@ function photoPicker(box) {
 }
 
 const A0 = () => state.allowance || (state.admin && state.admin.settings.allowance) || { slabs: [{ fromHours: 3, amount: 40 }, { fromHours: 5, amount: 55 }, { fromHours: 6, amount: 65 }] };
-const amountFor = (minutes) => { let a = 0; for (const x of A0().slabs || []) if (minutes >= x.fromHours * 60) a = x.amount; return a; };
+const slabsOf = (type) => (type === 'service' ? A0().slabs : A0().deliverySlabs || A0().slabs) || [];
+const firstHours = (type) => String((slabsOf(type)[0] || {}).fromHours || 1);
+const amountFor = (minutes, type) => { let a = 0; for (const x of slabsOf(type)) if (minutes >= x.fromHours * 60) a = x.amount; return a; };
 // 'YYYY-MM-DDTHH:MM' in the phone's own time, for <input type="datetime-local">
 const localInput = (iso) => { if (!iso) return ''; const x = new Date(iso); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
 const toIso = (v) => (v ? new Date(v).toISOString() : '');
@@ -404,7 +406,7 @@ function timesFields(d, startIso, endIso) {
       <div><label>Start time ${startIso ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="time" id="t-start" value="${esc(st ? st.slice(11) : '')}"></div>
       <div><label>End time</label><input type="time" id="t-end" value="${esc(en ? en.slice(11) : '')}"></div>
     </div>
-    <div class="small expense" id="t-prev" data-people="${people}" data-start="${esc(st)}" data-end="${esc(en)}"></div>`;
+    <div class="small expense" id="t-prev" data-type="${esc(d.type || 'delivery')}" data-people="${people}" data-start="${esc(st)}" data-end="${esc(en)}"></div>`;
 }
 // The typed times as local 'YYYY-MM-DDTHH:MM' strings (end moved to next day if before start).
 function timesValues() {
@@ -425,9 +427,9 @@ function bindTimes() {
     if (!v.end) { box.innerHTML = '💰 Enter the <b>end time</b>.'; return; }
     const m = Math.round((new Date(v.end) - new Date(v.start)) / 60000);
     if (m > 24 * 60) { box.innerHTML = '<span class="empty">Work time cannot be more than 24 hours</span>'; return; }
-    const amt = amountFor(m);
+    const amt = amountFor(m, box.dataset.type);
     const n = Number(box.dataset.people) || 0;
-    box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b>${v.nextDay ? ' <span class="badge warn">ends next day</span>' : ''} → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(String((A0().slabs[0] || {}).fromHours || 3)) + ' h)'}`;
+    box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b>${v.nextDay ? ' <span class="badge warn">ends next day</span>' : ''} → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(firstHours(box.dataset.type)) + ' h)'}`;
   };
   ['t-date', 't-start', 't-end'].forEach((id) => (document.getElementById(id).oninput = draw));
   draw();
@@ -1159,8 +1161,10 @@ function adminSettings(main) {
       </div>
       <h3 style="margin-top:16px">💰 Expense per person (by work time Start → Completed)</h3>
       <div class="muted small">Each line: from this many hours, pay this amount to each person on the job. Under the first line = nil.</div>
-      <div id="slabs"></div>
-      <button type="button" class="link" id="add-slab">+ Add line</button>
+      <div class="slab-grid">
+        <div><h4 style="margin:10px 0 0">🚚 Deliveries</h4><div id="dslabs"></div><button type="button" class="link" id="add-dslab">+ Add line</button></div>
+        <div><h4 style="margin:10px 0 0">🔧 Services</h4><div id="slabs"></div><button type="button" class="link" id="add-slab">+ Add line</button></div>
+      </div>
       <div class="form-grid">
         <div><label>Pay expense for</label><select name="appliesTo"><option value="all">Deliveries and services</option><option value="service" ${(s.allowance || {}).appliesTo === 'service' ? 'selected' : ''}>Services only</option></select></div>
         <div><label>Also re-calculate jobs completed from (optional)</label><input type="date" name="recalcFrom"></div>
@@ -1176,23 +1180,27 @@ function adminSettings(main) {
     <div class="card"><h2>Backup</h2><p class="muted">Download all data (units, people, deliveries, history). Keep a copy safe; you can restore it any time.</p>
       <div class="row"><a class="btn" href="/api/admin/backup">⬇️ Download backup</a>
       <label class="btn" style="margin:0;font-weight:500">⬆️ Restore from file<input type="file" id="restore" accept=".json,application/json" hidden></label></div></div>`;
-  const slabsEl = document.getElementById('slabs');
-  const slabRow = (x) => `<div class="row slab" style="margin-top:6px;flex-wrap:nowrap">From <input class="sh" type="number" step="0.5" min="0.5" max="48" value="${esc(x.fromHours)}" style="width:80px"> hours → ₹ <input class="sa" type="number" min="0" value="${esc(x.amount)}" style="width:90px"> <button type="button" class="link danger" title="Remove">✕</button></div>`;
-  const addSlab = (x) => {
-    slabsEl.insertAdjacentHTML('beforeend', slabRow(x));
-    const r = slabsEl.lastElementChild;
+  const slabBox = (id) => document.getElementById(id);
+  const slabRow = (x) => `<div class="row slab" style="margin-top:6px;flex-wrap:nowrap"><span>From</span><input class="sh" type="number" step="0.5" min="0.5" max="48" value="${esc(x.fromHours)}" style="width:70px"><span>h → ₹</span><input class="sa" type="number" min="0" value="${esc(x.amount)}" style="width:80px"> <button type="button" class="link danger" title="Remove">✕</button></div>`;
+  const addSlab = (id, x) => {
+    slabBox(id).insertAdjacentHTML('beforeend', slabRow(x));
+    const r = slabBox(id).lastElementChild;
     r.querySelector('button').onclick = () => r.remove();
   };
-  ((s.allowance && s.allowance.slabs) || []).forEach(addSlab);
-  document.getElementById('add-slab').onclick = () => addSlab({ fromHours: '', amount: '' });
+  ((s.allowance && s.allowance.slabs) || []).forEach((x) => addSlab('slabs', x));
+  ((s.allowance && (s.allowance.deliverySlabs || s.allowance.slabs)) || []).forEach((x) => addSlab('dslabs', x));
+  document.getElementById('add-slab').onclick = () => addSlab('slabs', { fromHours: '', amount: '' });
+  document.getElementById('add-dslab').onclick = () => addSlab('dslabs', { fromHours: '', amount: '' });
   const sf = document.getElementById('set-form');
   sf.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(sf);
     try {
-      const slabs = [...document.querySelectorAll('#slabs .slab')].map((r) => ({ fromHours: Number(r.querySelector('.sh').value), amount: Number(r.querySelector('.sa').value) })).filter((x) => x.fromHours > 0);
+      const readSlabs = (id) => [...document.querySelectorAll(`#${id} .slab`)].map((r) => ({ fromHours: Number(r.querySelector('.sh').value), amount: Number(r.querySelector('.sa').value) })).filter((x) => x.fromHours > 0);
+      const slabs = readSlabs('slabs');
+      const deliverySlabs = readSlabs('dslabs');
       const body = Object.fromEntries(fd);
-      body.allowance = { appliesTo: body.appliesTo, slabs, recalcFrom: body.recalcFrom };
+      body.allowance = { appliesTo: body.appliesTo, slabs, deliverySlabs, recalcFrom: body.recalcFrom };
       delete body.appliesTo; delete body.recalcFrom;
       await api('/admin/settings', { method: 'PUT', body });
       state.pub.orgName = fd.get('orgName') || state.pub.orgName;
