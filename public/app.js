@@ -1068,13 +1068,17 @@ async function adminReport(main) {
 }
 
 // --- Clients & machines (Google Sheet) ---
-const APPS_SCRIPT = `const KEY = 'CHANGE-THIS-TO-A-SECRET';
+// Code for a NEW, separate Apps Script project (it does not touch any script already in the sheet).
+const appsScriptCode = (sheetId) => `// Delivery Team – reads the client and machine tabs. Separate project, so it does not
+// change any other script you already use with this sheet.
+const KEY = 'CHANGE-THIS-TO-A-SECRET';
+const SHEET_ID = '${sheetId || 'PASTE-YOUR-SHEET-ID-HERE'}';
 
 function doGet(e) {
   const out = (obj) => ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
   if (!e || !e.parameter || e.parameter.key !== KEY) return out({ error: 'wrong key' });
   const tabs = String(e.parameter.tabs || 'Party,Machines').split(',').slice(0, 5);
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.openById(SHEET_ID);
   const data = {};
   tabs.forEach((name) => {
     const sh = ss.getSheetByName(name.trim());
@@ -1082,6 +1086,7 @@ function doGet(e) {
   });
   return out(data);
 }`;
+const sheetIdOf = (link) => ((String(link || '').match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/) || [])[1] || '');
 
 async function adminSheet(main) {
   const s = await api('/admin/sheet');
@@ -1099,12 +1104,14 @@ async function adminSheet(main) {
     <form class="card section" id="sheet-form"><h2>Connect your Google Sheet</h2>
       <p class="small"><b>Recommended (sheet stays private):</b></p>
       <ol class="small">
-        <li>Open your sheet → <b>Extensions → Apps Script</b>.</li>
-        <li>Delete what is there and paste the code below. Change <code>CHANGE-THIS-TO-A-SECRET</code> to your own secret word (e.g. <code>ww-9x7k2</code>).</li>
-        <li>Click <b>Deploy → New deployment</b> → type <b>Web app</b> → Execute as <b>Me</b>, Who has access <b>Anyone</b> → <b>Deploy</b> → allow access.</li>
-        <li>Copy the <b>Web app URL</b> and paste it below with the same secret word, then Save.</li>
+        <li>Go to <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener"><b>script.google.com → New project</b></a> (a <b>new, separate</b> project – do <u>not</u> paste into a script you already use, like your quote app).</li>
+        <li>Name it e.g. <i>Delivery Team link</i>. Delete the empty <code>myFunction</code> and paste the code below.</li>
+        <li>In the code, change <code>CHANGE-THIS-TO-A-SECRET</code> to your own secret word (e.g. <code>ww-9x7k2</code>). Check <code>SHEET_ID</code> is your sheet's ID (the long part of the sheet link between <code>/d/</code> and <code>/edit</code>). Save.</li>
+        <li>Click <b>Deploy → New deployment</b> → ⚙️ type <b>Web app</b> → Execute as <b>Me</b>, Who has access <b>Anyone</b> → <b>Deploy</b> → allow access.</li>
+        <li>Copy the <b>Web app URL</b> and paste it below with the same secret word, then <b>Save &amp; sync</b>.</li>
       </ol>
-      <details><summary class="small"><b>Show Apps Script code</b></summary><textarea readonly id="code" style="min-height:260px;font-family:monospace;font-size:12px">${esc(APPS_SCRIPT)}</textarea><button type="button" id="copy">📋 Copy code</button></details>
+      <div class="small" style="margin-bottom:6px">Your sheet link (fills in the SHEET_ID in the code): <input id="sid-link" placeholder="https://docs.google.com/spreadsheets/d/…/edit" value="${esc(s.sheetLink)}" style="margin-top:4px"></div>
+      <details><summary class="small"><b>Show Apps Script code</b></summary><textarea readonly id="code" style="min-height:300px;font-family:monospace;font-size:12px">${esc(appsScriptCode(sheetIdOf(s.sheetLink)))}</textarea><button type="button" id="copy">📋 Copy code</button></details>
       <div class="form-grid">
         <div><label>Apps Script web app URL</label><input name="scriptUrl" value="${esc(s.scriptUrl)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
         <div><label>Secret word ${s.key ? '(saved – leave blank to keep)' : ''}</label><input name="key" autocomplete="off" placeholder="${s.key ? '••••••' : 'same as in the script'}"></div>
@@ -1133,6 +1140,7 @@ async function adminSheet(main) {
     sync.disabled = true;
     try { const r = await api('/admin/sheet/sync', { method: 'POST' }); state.machineList = null; toast(`Synced: ${r.clients} clients, ${r.machines} machines`); adminSheet(main); } catch (ex) { toast(ex.message, true); sync.disabled = false; }
   };
+  document.getElementById('sid-link').oninput = (e) => { document.getElementById('code').value = appsScriptCode(sheetIdOf(e.target.value)); };
   document.getElementById('copy').onclick = () => {
     const c = document.getElementById('code');
     c.select();
