@@ -79,7 +79,8 @@ function changed() {
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '30mb' })); // room for a few photos
-app.use(express.static(path.join(__dirname, 'public')));
+// Always check for a newer page after an update (no stale app.js / style.css in phones).
+app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 // Simple brute-force protection for login.
 const attempts = new Map();
@@ -1030,7 +1031,7 @@ admin.post('/restore', (req, res) => {
 app.use('/api/admin', admin);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
-app.get(/.*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get(/.*/, (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
 app.use((err, req, res, next) => {
   console.error(err);
