@@ -220,3 +220,4 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .search-bar input { border: 0; padding: 8px 4px; flex: 1; min-width: 0; }
 .search-bar input:focus { outline: none; }
 .search-bar select { width: auto; }
+.absent-log { margin-top: 8px; padding: 6px 10px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; }

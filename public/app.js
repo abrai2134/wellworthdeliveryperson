@@ -210,13 +210,15 @@ function deliveryCard(d, who, today) {
     ].join(' ');
     const actions = !canTeam ? '' : [
       who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
-      // "Absent – replace" is admin only; a unit can still remove an emergency person it added.
-      p && (who === 'admin' || t.extra) ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent – replace'}</button>` : '',
+      p ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent'}</button>` : '',
     ].join('');
     return `<div class="drv"><div class="place">${esc(placeName(t, d))}</div>
       <div class="who-line">${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
       ${p || actions ? `<div class="sub-line small">${p && p.unitName ? `<span class="muted">${esc(p.unitName)}</span>` : ''}${p && p.phone ? telLink(p.phone) : ''}${actions}</div>` : ''}</div>`;
   }).join('');
+  const absents = d.absents && d.absents.length
+    ? `<div class="small absent-log">🚫 ${d.absents.map((x) => `<b>${esc(x.name)}</b> absent – marked by ${esc(x.by)} ${esc(fmtTime(x.at))}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>🚫 ')}</div>`
+    : '';
   const lost = open && d.lost.length ? `<div class="badge bad" style="margin-top:8px;white-space:normal">⚠ ${d.lost.map((l) => `${esc(l.person)} was taken by ${esc(l.unit)} for an emergency`).join('; ')}</div>` : '';
   const typeTag = d.type === 'service' ? '<span class="badge w3">🔧 Service</span> ' : '';
   const head = `<div class="row"><div><div class="name">${typeTag}${who === 'admin' || who === 'staff' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])}</div>
@@ -261,7 +263,7 @@ function deliveryCard(d, who, today) {
   const photos = d.photos && d.photos.length
     ? `<div class="small" style="margin-top:8px"><b>📒 Service book (${d.photos.length})</b><div class="thumbs">${d.photos.map((p) => `<span class="thumb"><a href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(fmtTime(p.at))}"><img src="${esc(p.url)}" alt="service book photo" loading="lazy"></a>${who === 'admin' ? `<button type="button" data-delphoto="${esc(d.id)}|${esc(p.file)}" title="Delete photo">✕</button>` : ''}</span>`).join('')}</div></div>`
     : '';
-  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${expense}${photos}${team}${lost}${buttons}</div>`;
+  return `<div class="card unit-card${d.status === 'cancelled' ? ' muted' : ''}${d.status === 'done' ? ' done' : ''}">${head}${info ? `<div style="margin-top:6px">${info}</div>` : ''}${timeline(d)}${expense}${photos}${team}${absents}${lost}${buttons}</div>`;
 }
 
 function waText(d) {
@@ -338,10 +340,13 @@ function bindDeliveryButtons(root, base, list, reload) {
     const [id, personId, name] = b.dataset.replace.split('|');
     const d = find(id);
     const t = d.team.find((x) => x.person && x.person.id === personId);
-    const msg = t && t.extra ? `Remove ${name} (emergency person) from this job?` : `${name} can't come? They are taken off this job and someone else is picked automatically.`;
-    if (!confirm(msg)) return;
-    if (t && t.extra) post(`${base}/deliveries/${id}/extra/cancel`, 'Done – team updated', { slot: t.slot });
-    else post(`${base}/deliveries/${id}/replace`, 'Done – team updated', { personId });
+    if (t && t.extra) {
+      if (confirm(`Remove ${name} (emergency person) from this job?`)) post(`${base}/deliveries/${id}/extra/cancel`, 'Done – team updated', { slot: t.slot });
+      return;
+    }
+    const reason = prompt(`Mark ${name} ABSENT for this job?\nA new name is picked automatically. This is recorded and the admin can see it.\n\nReason (optional):`, '');
+    if (reason === null) return; // cancelled
+    post(`${base}/deliveries/${id}/replace`, `${name} marked absent – new name picked`, { personId, reason });
   }));
   root.querySelectorAll('[data-extra]').forEach((b) => (b.onclick = () => askExtra(base, find(b.dataset.extra), reload)));
   root.querySelectorAll('[data-change]').forEach((b) => (b.onclick = () => { const [id, role, slot] = b.dataset.change.split('|'); changePlace(find(id), role, Number(slot)); }));
@@ -887,7 +892,7 @@ function changePlace(d, role, slot) {
   openModal(`<h2>Change ${role === 'installer' ? 'installation person' : 'helper'}</h2>
     <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))} · ${esc(SESSION_NAMES[d.session])} · ${esc(placeName({ role, slot }, d))}</div>
     <label>Person</label><select name="personId" required><option value="">— choose —</option>${opts}</select>
-    <p class="muted small">Only people of the matching kind are listed. If you only want someone else (anyone), close this and use "Absent – replace".</p>
+    <p class="muted small">Only people of the matching kind are listed. If you only want someone else (anyone), close this and use "Absent".</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
   async (fd) => {
     if (!fd.get('personId')) throw new Error('Choose a person');

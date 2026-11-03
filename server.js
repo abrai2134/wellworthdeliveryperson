@@ -222,6 +222,7 @@ function deliveryView(d) {
     completedBy: d.completedBy || '',
     completionNote: d.completionNote || '',
     timesEditedBy: d.timesEditedBy || '',
+    absents: (d.absentLog || []).map((x) => ({ name: (db().people.find((p) => p.id === x.personId) || {}).name || '?', at: x.at, by: x.by, reason: x.reason || '' })),
     allowance: d.status === 'done' && d.allowance && d.allowance.applies
       ? { ...d.allowance, names: d.allowance.people.map((id) => (db().people.find((p) => p.id === id) || {}).name || '?') }
       : null,
@@ -500,14 +501,20 @@ function cancelExtra(d, body) {
   return { value: d };
 }
 
-function replace(d, body) {
+// Someone is absent: take them off and pick a new name. Every absent is recorded on the job
+// (who, by whom, when, reason) so the admin can see it.
+function replace(d, body, by) {
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   if (!S.isOpen(d)) return { error: 'This job is completed or cancelled' };
+  const personId = str(body.personId);
   try {
-    S.replacePerson(db(), d.id, str(body.personId));
+    S.replacePerson(db(), d.id, personId);
   } catch (e) {
     return { error: e.message };
   }
+  const now = db().assignments.filter((a) => a.deliveryId === d.id && a.personId).map((a) => a.personId);
+  d.absentLog = d.absentLog || [];
+  d.absentLog.push({ personId, at: new Date().toISOString(), by, reason: str(body.reason, 150), newTeam: now });
   store.save();
   return { value: d };
 }
@@ -572,8 +579,7 @@ unit.post('/deliveries/:id/complete', (req, res) => { const d = ownDelivery(req,
 unit.post('/deliveries/:id/photos', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, addPhotos(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/times', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, setTimes(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
-// "Absent – replace" is admin only (units asked the admin instead).
-unit.post('/deliveries/:id/replace', (req, res) => res.status(403).json({ error: 'Only the admin can replace a person. Please call the admin.' }));
+unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body, 'unit')); });
 
 app.use('/api/unit', unit);
 
@@ -914,7 +920,7 @@ admin.post('/deliveries/:id/photos/delete', (req, res) => {
 // Fix start / completed time (e.g. Start was not pressed); the expense is worked out again.
 admin.post('/deliveries/:id/times', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, setTimes(d, req.body, 'admin')); });
 admin.post('/deliveries/:id/reopen', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
-admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body)); });
+admin.post('/deliveries/:id/replace', (req, res) => { const d = anyDelivery(req, res); if (d) send(res, replace(d, req.body, 'admin')); });
 
 admin.post('/deliveries/:id/assign', (req, res) => {
   const d = anyDelivery(req, res);
