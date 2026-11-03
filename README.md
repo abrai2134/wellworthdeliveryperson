@@ -7,7 +7,7 @@ A small website that **picks the helpers and installation person for every machi
 - **Shared equally across all units** – helpers are pooled from every unit. Whoever has done the fewest deliveries goes next, and people are rotated across the different units' deliveries.
 - **More than one delivery a day** – each delivery gets its own team. Nobody is in two places at once: a *full day* delivery keeps the person all day, a *morning* and an *afternoon* delivery can share people.
 - **Emergency backup person** – tick *Emergency backup* on a person and they are used only when the regular people run short. Any unit can also tap **🆘 Emergency person** on a delivery and pick anyone: free people (backup first) are listed at the top; a person on another unit's delivery can be moved, that unit is told and gets a free replacement if there is one.
-- **Absent – replace** – if a helper can't come, the unit taps it and someone else is picked automatically. The rest of the team stays the same.
+- **Absent – replace** (admin only) – if a helper can't come, the admin taps it and someone else is picked automatically. The rest of the team stays the same. Units call the admin for this.
 - **Leave** – admin marks leave; only that person's place is refilled.
 - **Teams stay stable** – once a team is made it is not reshuffled. Admin can *Re-balance* from a date if wanted, and can change any person by hand (two people swap if needed).
 - **Start / Completed** – the unit taps **▶ Start** when the team leaves and **✓ Completed** when the job is done. The team is then free straight away, and any other job that day that was short of people gets them automatically. Times are saved: *requested*, *started*, *completed*.

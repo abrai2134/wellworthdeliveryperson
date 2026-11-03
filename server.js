@@ -572,7 +572,8 @@ unit.post('/deliveries/:id/complete', (req, res) => { const d = ownDelivery(req,
 unit.post('/deliveries/:id/photos', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, addPhotos(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/times', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, setTimes(d, req.body, 'unit')); });
 unit.post('/deliveries/:id/reopen', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, reopenDelivery(d)); });
-unit.post('/deliveries/:id/replace', (req, res) => { const d = ownDelivery(req, res); if (d) send(res, replace(d, req.body)); });
+// "Absent – replace" is admin only (units asked the admin instead).
+unit.post('/deliveries/:id/replace', (req, res) => res.status(403).json({ error: 'Only the admin can replace a person. Please call the admin.' }));
 
 app.use('/api/unit', unit);
 

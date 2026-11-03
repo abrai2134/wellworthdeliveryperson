@@ -210,7 +210,8 @@ function deliveryCard(d, who, today) {
     ].join(' ');
     const actions = !canTeam ? '' : [
       who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
-      p ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent – replace'}</button>` : '',
+      // "Absent – replace" is admin only; a unit can still remove an emergency person it added.
+      p && (who === 'admin' || t.extra) ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent – replace'}</button>` : '',
     ].join('');
     return `<div class="drv"><div class="place">${esc(placeName(t, d))}</div>
       <div class="who-line">${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
