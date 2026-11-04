@@ -254,7 +254,8 @@ function readDelivery(body, unitId, opts = {}) {
   if (!isValid(date)) return { error: 'Choose a delivery date' };
   if (date < t) return { error: 'The date cannot be in the past' };
   if (date > addDays(t, BOOK_AHEAD_DAYS)) return { error: `You can book up to ${BOOK_AHEAD_DAYS} days ahead` };
-  const session = S.SESSIONS.includes(body.session) ? body.session : 'FULL';
+  const session = S.SESSIONS.includes(body.session) ? body.session : body.type === 'loading' ? 'AM' : 'FULL';
+  if (body.type === 'loading' && !S.LOADING_SESSIONS.includes(session)) return { error: 'Loading / unloading: choose Morning, Afternoon or Evening' };
   const type = TYPES.includes(body.type) ? body.type : 'delivery';
   const isLoad = type === 'loading';
   // Loading / unloading: 1 to 4 persons, any helper or installation person, no installation place.
@@ -309,7 +310,7 @@ function openLoading(unitId, exceptId) {
 }
 function loadingBlock(unitId, exceptId) {
   const o = openLoading(unitId, exceptId);
-  return o ? { error: `The loading / unloading job of ${o.date} (${o.session === 'AM' ? 'morning' : o.session === 'PM' ? 'afternoon' : 'full day'}) has no end time yet. Mark it ✓ Completed with start and end time before booking the next one.` } : null;
+  return o ? { error: `The loading / unloading job of ${o.date} (${{ AM: 'morning', PM: 'afternoon', EVE: 'evening' }[o.session] || 'full day'}) has no end time yet. Mark it ✓ Completed with start and end time before booking the next one.` } : null;
 }
 
 function createDelivery(body, unitId, by) {

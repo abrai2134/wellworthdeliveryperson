@@ -3,7 +3,7 @@
 // ---------- small helpers ----------
 const $app = document.getElementById('app');
 const state = { pub: { orgName: 'Delivery Team', sessions: ['FULL', 'AM', 'PM'], maxHelpers: 8 }, me: null, tab: 'today', admin: null, from: null, to: null };
-const SESSION_NAMES = { FULL: 'Full day', AM: 'Morning', PM: 'Afternoon' };
+const SESSION_NAMES = { FULL: 'Full day', AM: 'Morning', PM: 'Afternoon', EVE: 'Evening' };
 const ROLE_NAMES = { helper: 'Helper', installer: 'Installation person', both: 'Helper + Installation' };
 
 function esc(v) {
@@ -535,7 +535,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     <div class="form-grid">
       <div><label>Type</label><select name="type" id="f-type"><option value="delivery">🚚 Delivery</option><option value="service" ${v.type === 'service' ? 'selected' : ''}>🔧 Service</option><option value="loading" ${v.type === 'loading' ? 'selected' : ''}>📦 Loading / Unloading</option></select></div>
       <div><label id="f-date-l">Date *</label><input type="date" name="date" required value="${esc(v.date)}" min="${esc(state.today)}"></div>
-      <div><label>Time</label><select name="session">${state.pub.sessions.map((s) => `<option value="${s}" ${v.session === s ? 'selected' : ''}>${SESSION_NAMES[s]}</option>`).join('')}</select></div>
+      <div><label>Time</label><select name="session" id="f-session">${state.pub.sessions.map((s) => `<option value="${s}" ${v.session === s ? 'selected' : ''}>${SESSION_NAMES[s]}</option>`).join('')}</select></div>
       <div><label id="f-help-l">Helpers needed *</label><select name="helpersNeeded" id="f-help">${helperOptions(v.helpersNeeded)}</select></div>
       <div id="f-inst-wrap"><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
@@ -556,7 +556,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       </div>
       <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
     </details>
-    <p class="muted small" id="f-fair-note">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
+    <p class="muted small" id="f-fair-note">People are picked fairly from all units. "Morning", "Afternoon" and "Evening" jobs can share people; a "Full day" job keeps them the whole day.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book'}</button></div>`,
   async (fd) => {
     const body = Object.fromEntries(fd);
@@ -646,6 +646,11 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     document.getElementById('f-load-note').hidden = !load;
     modalBody.querySelector('.more-details').hidden = load;
     document.getElementById('f-fair-note').hidden = load;
+    // Loading / unloading: Morning, Afternoon or Evening only (no Full day).
+    const ses = document.getElementById('f-session');
+    const fullOpt = ses.querySelector('option[value=FULL]');
+    if (fullOpt) fullOpt.hidden = fullOpt.disabled = load;
+    if (load && ses.value === 'FULL') ses.value = 'AM';
     document.getElementById('f-help-l').textContent = load ? 'Persons needed (1–4) *' : 'Helpers needed *';
     const cur = Number(helpSel.value) || 0;
     if (load && helpSel.dataset.mode !== 'load') {

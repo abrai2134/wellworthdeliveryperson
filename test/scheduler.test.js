@@ -164,3 +164,11 @@ test('loading / unloading: unit people first, helpers and installers, fair by lo
   // loading does not change the delivery rotation counts
   assert.equal(Object.keys(S.history(db, '2099-01-01').duty).length, 0);
 });
+
+test('evening: shares people with morning/afternoon, not with full day', () => {
+  assert.equal(S.conflicts('AM', 'EVE'), false);
+  assert.equal(S.conflicts('PM', 'EVE'), false);
+  assert.equal(S.conflicts('EVE', 'EVE'), true);
+  assert.equal(S.conflicts('FULL', 'EVE'), true);
+  assert.ok(!S.LOADING_SESSIONS.includes('FULL'));
+});
