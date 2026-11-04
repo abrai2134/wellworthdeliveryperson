@@ -135,3 +135,32 @@ test('a completed delivery frees its people for another delivery the same day', 
   const d3 = book(db, 'u1', '2026-07-01', 1, false, 'PM');
   assert.ok(S.personStatus(db, d3.id).every((x) => x.status !== 'other' || x.deliveryId !== d1.id));
 });
+
+test('loading / unloading: unit people first, helpers and installers, fair by loading count', () => {
+  const db = setup(2, 3, 1); // per unit: 3 helpers + 1 installer
+  const book2 = (date, n, session = 'FULL') => {
+    const d = { id: 'L' + ++seq, unitId: 'u1', type: 'loading', date, session, helpersNeeded: n, status: 'planned', createdAt: String(seq).padStart(6, '0') };
+    db.deliveries.push(d);
+    S.repairDate(db, date);
+    return d;
+  };
+  let date = '2026-08-01';
+  for (let i = 0; i < 8; i++) { book2(date, 2); date = addDays(date, 1); }
+  const c = {};
+  for (const a of db.assignments) if (a.personId) c[a.personId] = (c[a.personId] || 0) + 1;
+  const unit1 = ['h1_1', 'h1_2', 'h1_3', 'i1_1'];
+  assert.ok(Object.keys(c).every((id) => unit1.includes(id)), 'only unit 1 people: ' + JSON.stringify(c));
+  assert.ok(spread(c, unit1) <= 1, JSON.stringify(c)); // 16 places over 4 people = 4 each
+  assert.ok(c.i1_1 > 0); // installation person also loads
+  // 4 persons max, 1 min
+  assert.equal(S.deliverySlots({ type: 'loading', helpersNeeded: 9 }).length, 4);
+  assert.equal(S.deliverySlots({ type: 'loading', helpersNeeded: 0 }).length, 1);
+  // short in the unit -> other unit helps
+  const big = book2('2026-09-01', 4);
+  book2('2026-09-01', 2, 'FULL');
+  const team = db.assignments.filter((a) => a.date === '2026-09-01' && a.personId).map((a) => a.personId);
+  assert.ok(team.some((id) => id.startsWith('h2_') || id.startsWith('i2_')));
+  assert.equal(S.teamOf(db, big.id).filter((a) => a.personId).length, 4);
+  // loading does not change the delivery rotation counts
+  assert.equal(Object.keys(S.history(db, '2099-01-01').duty).length, 0);
+});

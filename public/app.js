@@ -46,6 +46,7 @@ function roleBadge(role) {
   return role === 'installer' ? '<span class="badge w3">Installation</span>' : role === 'both' ? '<span class="badge w4">Helper + Install</span>' : '<span class="badge w2">Helper</span>';
 }
 function needText(d) {
+  if (d.type === 'loading') return `${d.helpersNeeded} person${d.helpersNeeded > 1 ? 's' : ''} for loading / unloading`;
   const parts = [];
   if (d.installation) parts.push(d.type === 'service' ? 'service person' : 'installation person');
   if (d.helpersNeeded) parts.push(`${d.helpersNeeded} helper${d.helpersNeeded > 1 ? 's' : ''}`);
@@ -53,6 +54,7 @@ function needText(d) {
 }
 function placeName(t, d) {
   if (t.extra) return 'Emergency';
+  if (t.role === 'loader') return `Person ${t.slot + 1}`;
   if (t.role === 'installer') return d && d.type === 'service' ? 'Service' : 'Installation';
   return `Helper ${t.slot + 1}`;
 }
@@ -170,7 +172,7 @@ function fmtDur(ms) {
 }
 const durBetween = (a, b) => (a && b ? new Date(b) - new Date(a) : null);
 const isOpenJob = (d) => d.status === 'planned' || d.status === 'started';
-const jobName = (d) => (d.type === 'service' ? 'Service' : 'Delivery');
+const jobName = (d) => (d.type === 'service' ? 'Service' : d.type === 'loading' ? 'Loading / Unloading' : 'Delivery');
 
 function statusBadge(d, today) {
   if (d.status === 'cancelled') return '<span class="badge">Cancelled</span>';
@@ -199,6 +201,7 @@ function deliveryCard(d, who, today) {
   const boss = who === 'admin' || who === 'unit';
   const open = isOpenJob(d);
   const canTeam = boss && open && !past;
+  const lockTeam = d.type === 'loading' && who !== 'admin'; // loading: only the admin changes people
   const team = d.team.map((t) => {
     const p = t.person;
     const tags = [
@@ -209,8 +212,8 @@ function deliveryCard(d, who, today) {
       t.reason ? `<span class="small muted">${esc(t.reason)}</span>` : '',
     ].join(' ');
     const actions = !canTeam ? '' : [
-      who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
-      p ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent'}</button>` : '',
+      lockTeam ? '' : who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
+      p && !lockTeam ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent'}</button>` : '',
     ].join('');
     return `<div class="drv"><div class="place">${esc(placeName(t, d))}</div>
       <div class="who-line">${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
@@ -220,7 +223,7 @@ function deliveryCard(d, who, today) {
     ? `<div class="small absent-log">🚫 ${d.absents.map((x) => `<b>${esc(x.name)}</b> absent – marked by ${esc(x.by)} ${esc(fmtTime(x.at))}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>🚫 ')}</div>`
     : '';
   const lost = open && d.lost.length ? `<div class="badge bad" style="margin-top:8px;white-space:normal">⚠ ${d.lost.map((l) => `${esc(l.person)} was taken by ${esc(l.unit)} for an emergency`).join('; ')}</div>` : '';
-  const typeTag = d.type === 'service' ? '<span class="badge w3">🔧 Service</span> ' : '';
+  const typeTag = d.type === 'service' ? '<span class="badge w3">🔧 Service</span> ' : d.type === 'loading' ? '<span class="badge warn">📦 Loading / Unloading</span> ' : '';
   const head = `<div class="row"><div><div class="name">${typeTag}${who === 'admin' || who === 'staff' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])}</div>
       <div class="small muted">${esc(fmtDate(d.date))} · needs ${esc(needText(d))}</div></div><div class="spacer"></div>${statusBadge(d, today)}</div>`;
   const links = [
@@ -241,13 +244,13 @@ function deliveryCard(d, who, today) {
     btns.push(`<button class="small primary" data-complete="${esc(d.id)}">✓ Completed</button>`);
   }
   if (canTeam) {
-    btns.push(`<button class="small" data-extra="${esc(d.id)}">🆘 Emergency person</button>`);
+    if (!lockTeam) btns.push(`<button class="small" data-extra="${esc(d.id)}">🆘 Emergency person</button>`);
     btns.push(`<button class="small" data-edit-del="${esc(d.id)}">Edit</button>`);
   }
-  if (boss && d.status === 'done') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
+  if (boss && d.status === 'done' && d.type !== 'loading') btns.push(`<button class="small" data-service="${esc(d.id)}">🔧 Book service</button>`);
   if (who === 'admin' && d.status === 'done') btns.push(`<button class="small" data-times="${esc(d.id)}">🕒 Edit times</button>`);
   if (who === 'unit' && d.status === 'done' && !d.startedAt) btns.push(`<button class="small primary" data-times="${esc(d.id)}">🕒 Add times</button>`);
-  if (boss && d.status !== 'cancelled' && (d.status === 'done' || !(d.date > today))) btns.push(`<button class="small" data-photo="${esc(d.id)}">📷 Add photo</button>`);
+  if (boss && d.type !== 'loading' && d.status !== 'cancelled' && (d.status === 'done' || !(d.date > today))) btns.push(`<button class="small" data-photo="${esc(d.id)}">📷 Add photo</button>`);
   if (who !== 'staff' && d.status !== 'cancelled') btns.push(`<button class="small" data-wa="${esc(d.id)}">📤 WhatsApp</button>`);
   if (canTeam && d.status === 'planned') btns.push(`<div class="spacer"></div><button class="small danger" data-cancel-del="${esc(d.id)}">Cancel</button>`);
   if (boss && (d.status === 'done' || d.status === 'started')) btns.push(`<div class="spacer"></div><button class="link small" data-reopen="${esc(d.id)}">${d.status === 'done' ? 'Reopen' : 'Undo start'}</button>`);
@@ -394,7 +397,7 @@ function photoPicker(box) {
 }
 
 const A0 = () => state.allowance || (state.admin && state.admin.settings.allowance) || { slabs: [{ fromHours: 3, amount: 40 }, { fromHours: 5, amount: 55 }, { fromHours: 6, amount: 65 }] };
-const slabsOf = (type) => (type === 'service' ? A0().slabs : A0().deliverySlabs || A0().slabs) || [];
+const slabsOf = (type) => (type === 'loading' ? [] : type === 'service' ? A0().slabs : A0().deliverySlabs || A0().slabs) || [];
 const firstHours = (type) => String((slabsOf(type)[0] || {}).fromHours || 1);
 const amountFor = (minutes, type) => { let a = 0; for (const x of slabsOf(type)) if (minutes >= x.fromHours * 60) a = x.amount; return a; };
 // 'YYYY-MM-DDTHH:MM' in the phone's own time, for <input type="datetime-local">
@@ -430,12 +433,13 @@ function bindTimes() {
   const box = document.getElementById('t-prev');
   const draw = () => {
     const v = timesValues();
-    if (!v.start) { box.innerHTML = '💰 Enter the <b>start time</b> (when the team left) to work out the expense.'; return; }
+    if (!v.start) { box.innerHTML = box.dataset.type === 'loading' ? '🕒 Enter the <b>start time</b> – compulsory for loading / unloading.' : '💰 Enter the <b>start time</b> (when the team left) to work out the expense.'; return; }
     if (!v.end) { box.innerHTML = '💰 Enter the <b>end time</b>.'; return; }
     const m = Math.round((new Date(v.end) - new Date(v.start)) / 60000);
     if (m > 24 * 60) { box.innerHTML = '<span class="empty">Work time cannot be more than 24 hours</span>'; return; }
     const amt = amountFor(m, box.dataset.type);
     const n = Number(box.dataset.people) || 0;
+    if (box.dataset.type === 'loading') { box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b>${v.nextDay ? ' <span class="badge warn">ends next day</span>' : ''} · no expense (internal work)`; return; }
     box.innerHTML = `Work time <b>${esc(fmtDur(m * 60000))}</b>${v.nextDay ? ' <span class="badge warn">ends next day</span>' : ''} → 💰 ${amt ? `₹${amt} per person × ${n} = <b>₹${amt * n}</b>` : 'no expense (under ' + esc(firstHours(box.dataset.type)) + ' h)'}`;
   };
   ['t-date', 't-start', 't-end'].forEach((id) => (document.getElementById(id).oninput = draw));
@@ -474,10 +478,12 @@ function helperOptions(n) {
 
 function completeForm(base, d, reload) {
   const after = [['', 'No service needed'], ['7', 'After 1 week'], ['15', 'After 15 days'], ['30', 'After 1 month'], ['60', 'After 2 months'], ['90', 'After 3 months'], ['180', 'After 6 months'], ['365', 'After 1 year'], ['date', 'Choose a date…']];
+  const isLoad = d.type === 'loading';
   openModal(`<h2>${jobName(d)} completed</h2>
     <div class="muted">${esc(d.unitName)} · ${esc(fmtDate(d.date))}${d.customer ? ' · ' + esc(d.customer) : ''}</div>
-    <p class="small">The team becomes free for other jobs today. Check the times – change them if Start / Completed was not pressed on time.</p>
+    <p class="small">${isLoad ? '<b>Start time and end time are compulsory.</b> The next loading / unloading can be booked only after this one has its end time. No expense is paid for this internal work.' : 'The team becomes free for other jobs today. Check the times – change them if Start / Completed was not pressed on time.'}</p>
     ${timesFields(d, d.startedAt, new Date().toISOString())}
+    <div ${isLoad ? 'hidden' : ''}>
     <label>📒 Service book photo (customer remarks)</label>
     <div class="muted small">Take a photo of the page where the customer wrote remarks / signed. You can add more than one.</div>
     <div id="c-photos"></div>
@@ -492,9 +498,16 @@ function completeForm(base, d, reload) {
       <label>What service?</label><input name="serviceNotes" placeholder="e.g. first free service, oil change">
       <p class="muted small">A service person (installation person) is picked automatically, the same fair way.</p>
     </div>
+    </div>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Mark completed</button></div>`,
   async (fd) => {
     const body = { ...Object.fromEntries(fd), photos: getPhotos() };
+    if (isLoad) {
+      const v = timesValues();
+      if (!v.start) throw new Error('Enter the start time – it is compulsory for loading / unloading');
+      if (!v.end) throw new Error('Enter the end time – it is compulsory for loading / unloading');
+      body.serviceAfter = '';
+    }
     Object.assign(body, timesToSend());
     await api(`${base}/deliveries/${d.id}/complete`, { method: 'POST', body });
     toast(fd.get('serviceAfter') ? 'Completed – service booked' : 'Completed – team is free');
@@ -520,19 +533,22 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     ${v.parentId ? `<div class="muted small">Follow-up for ${esc(v.customer || 'this customer')}${v.machine ? ' · ' + esc(v.machine) : ''}</div><input type="hidden" name="parentId" value="${esc(v.parentId)}">` : ''}
     ${isAdmin ? `<label>Unit *</label><select name="unitId" ${lockUnit ? 'disabled' : ''} required>${units.map((u) => `<option value="${esc(u.id)}" ${v.unitId === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>${lockUnit ? `<input type="hidden" name="unitId" value="${esc(v.unitId)}">` : ''}` : ''}
     <div class="form-grid">
-      <div><label>Type</label><select name="type" id="f-type"><option value="delivery">🚚 Delivery</option><option value="service" ${v.type === 'service' ? 'selected' : ''}>🔧 Service</option></select></div>
+      <div><label>Type</label><select name="type" id="f-type"><option value="delivery">🚚 Delivery</option><option value="service" ${v.type === 'service' ? 'selected' : ''}>🔧 Service</option><option value="loading" ${v.type === 'loading' ? 'selected' : ''}>📦 Loading / Unloading</option></select></div>
       <div><label id="f-date-l">Date *</label><input type="date" name="date" required value="${esc(v.date)}" min="${esc(state.today)}"></div>
       <div><label>Time</label><select name="session">${state.pub.sessions.map((s) => `<option value="${s}" ${v.session === s ? 'selected' : ''}>${SESSION_NAMES[s]}</option>`).join('')}</select></div>
-      <div><label>Helpers needed *</label><select name="helpersNeeded">${helperOptions(v.helpersNeeded)}</select></div>
-      <div><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
+      <div><label id="f-help-l">Helpers needed *</label><select name="helpersNeeded" id="f-help">${helperOptions(v.helpersNeeded)}</select></div>
+      <div id="f-inst-wrap"><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
     <div id="f-entry-wrap"><label>✍️ Entry by * <span class="muted small" style="font-weight:400">– who is raising this request</span></label><select name="entryBy" id="f-entry"><option value="">Loading names…</option></select></div>
+    <div id="f-cust-block">
     <div class="lookup" style="margin-top:6px"><label>👤 Party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type party name to search">
       <div id="f-cust-list" class="lookup-list" hidden></div></div>
     <label style="margin-bottom:0">⚙️ Model no. <span class="muted small" style="font-weight:400">– one line per model, with quantity</span></label>
     <div id="f-items"></div>
     <button type="button" class="link" id="f-add-item">+ Add another model</button>
     <datalist id="machine-list"></datalist>
+    </div>
+    <p class="small" id="f-load-note" hidden>📦 Loading / unloading at <b>this unit</b>: helpers and installation persons of the unit are picked in turn, so the same people don't do it every time. Start and end time are compulsory when completing; no expense is paid.</p>
     <details class="more-details"><summary class="small"><b>More details (optional)</b> <span class="muted">– phone, address, notes · filled in from the party list</span></summary>
       <div class="form-grid">
         <div><label>Phone</label><input name="customerPhone" type="tel" value="${esc(v.customerPhone)}"></div>
@@ -540,11 +556,12 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       </div>
       <label>Address</label><textarea name="address">${esc(v.address)}</textarea>
     </details>
-    <p class="muted small">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
+    <p class="muted small" id="f-fair-note">People are picked fairly from all units. "Morning" and "Afternoon" jobs can share people; a "Full day" job keeps them the whole day.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">${d ? 'Save' : 'Book'}</button></div>`,
   async (fd) => {
     const body = Object.fromEntries(fd);
     body.items = readItems();
+    if (body.type === 'loading') { body.items = []; body.customer = ''; body.customerPhone = ''; body.address = ''; body.installation = 'no'; }
     if (!String(body.entryBy || '').trim()) throw new Error('Choose your name in "Entry by"');
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
     else await api(`${base}/deliveries`, { method: 'POST', body });
@@ -620,10 +637,26 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   };
   cust.onblur = () => setTimeout(() => (custList.hidden = true), 200);
   const type = document.getElementById('f-type');
+  const helpSel = document.getElementById('f-help');
   const sync = () => {
     const svc = type.value === 'service';
+    const load = type.value === 'loading';
+    document.getElementById('f-inst-wrap').hidden = load;
+    document.getElementById('f-cust-block').hidden = load;
+    document.getElementById('f-load-note').hidden = !load;
+    modalBody.querySelector('.more-details').hidden = load;
+    document.getElementById('f-fair-note').hidden = load;
+    document.getElementById('f-help-l').textContent = load ? 'Persons needed (1–4) *' : 'Helpers needed *';
+    const cur = Number(helpSel.value) || 0;
+    if (load && helpSel.dataset.mode !== 'load') {
+      helpSel.innerHTML = [1, 2, 3, 4].map((n) => `<option value="${n}" ${Math.min(4, Math.max(1, cur)) === n ? 'selected' : ''}>${n} person${n > 1 ? 's' : ''}</option>`).join('');
+      helpSel.dataset.mode = 'load';
+    } else if (!load && helpSel.dataset.mode === 'load') {
+      helpSel.innerHTML = helperOptions(cur);
+      helpSel.dataset.mode = '';
+    }
     document.getElementById('f-inst-l').textContent = svc ? 'Service person (technician) needed?' : 'Installation person needed?';
-    document.getElementById('f-date-l').textContent = svc ? 'Service date *' : 'Delivery date *';
+    document.getElementById('f-date-l').textContent = svc ? 'Service date *' : load ? 'Date *' : 'Delivery date *';
     document.getElementById('f-notes-l').textContent = svc ? 'What service?' : 'Notes';
     if (svc) modalBody.querySelector('.more-details').open = true; // services usually need a note
   };
@@ -693,7 +726,7 @@ function doneRow(d, who, today) {
   const money = !al ? '' : al.minutes == null ? '<span class="badge warn">no start</span>' : al.perPerson ? `<b>₹${al.total}</b>` : '<span class="muted">nil</span>';
   return `<details class="done-row"><summary>
       <span class="ok-tick">✓</span>
-      <span class="dr-main"><b>${d.type === 'service' ? '🔧 ' : ''}${esc(d.customer || '(no customer)')}</b>
+      <span class="dr-main"><b>${d.type === 'service' ? '🔧 ' : ''}${d.type === 'loading' ? '📦 Loading / Unloading' : esc(d.customer || '(no customer)')}</b>
         <span class="small muted">${who !== 'unit' ? esc(d.unitName) + ' · ' : ''}${esc(SESSION_NAMES[d.session])} · ${esc(team || 'no team')}</span></span>
       <span class="dr-side small">${work ? esc(work) : ''}${d.photos && d.photos.length ? ' · 📒' + d.photos.length : ''}<br>${money}</span>
     </summary><div class="dr-body">${deliveryCard(d, who, today)}</div></details>`;
@@ -719,7 +752,7 @@ function searchBarHtml() {
   const opt = (v, l) => `<option value="${v}" ${q.type === v ? 'selected' : ''}>${l}</option>`;
   return `<div class="search-bar no-print"><span>🔍</span>
       <input id="s-q" type="search" placeholder="Search party, model no., helper, phone, date…" value="${esc(q.q)}" autocomplete="off">
-      <select id="s-type">${opt('', 'All')}${opt('delivery', '🚚 Deliveries')}${opt('service', '🔧 Services')}</select></div>
+      <select id="s-type">${opt('', 'All')}${opt('delivery', '🚚 Deliveries')}${opt('service', '🔧 Services')}${opt('loading', '📦 Loading')}</select></div>
     <div id="s-results" hidden></div>`;
 }
 // root: element holding the bar; normal: element with the usual page (hidden while searching)
@@ -772,7 +805,7 @@ async function renderUnit() {
   wrap.innerHTML = `${searchBarHtml()}<div id="u-normal"><div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
       <div class="big">${todays.length ? `${todays.length} job${todays.length > 1 ? 's' : ''} today${todayOpen < todays.length ? ` · ${todays.length - todayOpen} completed` : ''}` : 'No job today'}</div>
       <div class="line">${upcoming.filter(isOpenJob).length} open${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
-      <div class="row"><a class="call" href="#" id="book">+ Book delivery / service</a></div></div>
+      <div class="row"><a class="call" href="#" id="book">+ Book delivery / service / loading</a></div></div>
     ${pendingPast.length ? `<div class="section"><h2>⚠ Earlier jobs not marked completed</h2><div class="grid">${pendingPast.map((d) => deliveryCard(d, 'unit', t)).join('')}</div></div>` : ''}
     ${upcoming.length ? groupByDate(upcoming, t, 'unit') : '<div class="card muted">Nothing booked. Tap "Book delivery / service", choose how many helpers and if an installation / service person is needed – the team is picked automatically.</div>'}
     ${done.length ? `<div class="section"><h2>Completed – last 30 days (${done.length})</h2>${done.some((d) => d.allowance && d.allowance.minutes == null) ? '<p class="small"><span class="badge warn">Some jobs have no start time</span> – open them and tap "🕒 Add times" so the expense can be worked out.</p>' : ''}<div class="done-list alone">${done.map((d) => doneRow(d, 'unit', t)).join('')}</div></div>` : ''}</div>`;
@@ -913,7 +946,7 @@ function adminDeliveries(main) {
       <button id="prev">◀ Prev</button><button id="this">Next 2 weeks</button><button id="next">Next ▶</button>
       <input type="date" id="from" value="${esc(A().from)}" style="width:auto"> to <input type="date" id="to" value="${esc(A().to)}" style="width:auto">
       <button id="go">Show</button>
-      <select id="ft" style="width:auto">${opt('', 'Deliveries + services', f.type)}${opt('delivery', '🚚 Deliveries only', f.type)}${opt('service', '🔧 Services only', f.type)}</select>
+      <select id="ft" style="width:auto">${opt('', 'Deliveries + services', f.type)}${opt('delivery', '🚚 Deliveries only', f.type)}${opt('service', '🔧 Services only', f.type)}${opt('loading', '📦 Loading / unloading only', f.type)}</select>
       <select id="fs" style="width:auto">${opt('active', 'All except cancelled', f.status)}${opt('open', 'Open only', f.status)}${opt('done', 'Completed only', f.status)}${opt('cancelled', 'Cancelled', f.status)}${opt('all', 'Everything', f.status)}</select>
       <div class="spacer"></div>
       <button id="print">🖨️ Print</button><button id="rebal">↻ Re-balance</button><button class="primary" id="add">+ New job</button></div>
@@ -1130,9 +1163,9 @@ async function adminReport(main) {
       <div class="small">Helpers – difference between most and least: <b>${sh}</b> ${ok(sh)}</div>
       <div class="small">Installation persons – difference: <b>${si}</b> ${ok(si)}</div>
       ${s.unfilled ? `<div class="small" style="margin-top:6px"><span class="badge bad">${s.unfilled} open places</span> – not enough people on some days.</div>` : ''}</div>
-    <div class="table-wrap"><table><thead><tr><th>Person</th><th class="num">Total</th><th class="num">As helper</th><th class="num">As installer</th><th class="num">Emergency</th><th class="num">Leave days</th>${s.units.map((u) => `<th class="num">${esc(u.name)}</th>`).join('')}</tr></thead>
+    <div class="table-wrap"><table><thead><tr><th>Person</th><th class="num">Total</th><th class="num">As helper</th><th class="num">As installer</th><th class="num">Emergency</th><th class="num">📦 Loading</th><th class="num">Leave days</th>${s.units.map((u) => `<th class="num">${esc(u.name)}</th>`).join('')}</tr></thead>
     <tbody>${s.rows.map((r) => `<tr><td><b>${esc(r.name)}</b> ${roleBadge(r.role)}${r.backup ? ' <span class="badge bad">backup</span>' : ''}${r.active ? '' : ' <span class="badge">inactive</span>'}<div class="small muted">${esc(r.unitName)}</div></td>
-      <td class="num"><b>${r.total}</b></td><td class="num">${r.helper}</td><td class="num">${r.installer}</td><td class="num">${r.emergency}</td><td class="num">${r.leaveDays}</td>${s.units.map((u) => `<td class="num">${heat(r.perUnit[u.id] || 0)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <td class="num"><b>${r.total}</b></td><td class="num">${r.helper}</td><td class="num">${r.installer}</td><td class="num">${r.emergency}</td><td class="num">${r.loading || 0}</td><td class="num">${r.leaveDays}</td>${s.units.map((u) => `<td class="num">${heat(r.perUnit[u.id] || 0)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="muted small">Counts include planned future jobs up to the end date. The unit columns show how often each person went on that unit's jobs — an even spread means people are shuffled well across units.</p>`;
   document.getElementById('rgo').onclick = () => { state.repFrom = document.getElementById('rf').value; state.repTo = document.getElementById('rt').value; renderAdmin(); };
 }

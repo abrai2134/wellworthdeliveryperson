@@ -18,7 +18,7 @@ const SESSION_DAYS = 30;
 const VERSION = (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'local').slice(0, 7);
 const COOKIE = 'wd_session';
 const BOOK_AHEAD_DAYS = 400; // services can be a year ahead
-const TYPES = ['delivery', 'service'];
+const TYPES = ['delivery', 'service', 'loading']; // loading = loading / unloading at the unit (internal)
 
 // ---------- first run: create the admin account ----------
 // ---------- start / completed times typed in by hand ----------
@@ -255,12 +255,17 @@ function readDelivery(body, unitId, opts = {}) {
   if (date < t) return { error: 'The date cannot be in the past' };
   if (date > addDays(t, BOOK_AHEAD_DAYS)) return { error: `You can book up to ${BOOK_AHEAD_DAYS} days ahead` };
   const session = S.SESSIONS.includes(body.session) ? body.session : 'FULL';
-  const helpersNeeded = Math.max(0, Math.min(S.MAX_HELPERS, parseInt(body.helpersNeeded, 10) || 0));
-  const installation = body.installation === true || body.installation === 'on' || body.installation === 'yes';
+  const type = TYPES.includes(body.type) ? body.type : 'delivery';
+  const isLoad = type === 'loading';
+  // Loading / unloading: 1 to 4 persons, any helper or installation person, no installation place.
+  const helpersNeeded = isLoad
+    ? parseInt(body.helpersNeeded, 10)
+    : Math.max(0, Math.min(S.MAX_HELPERS, parseInt(body.helpersNeeded, 10) || 0));
+  if (isLoad && !(helpersNeeded >= S.MIN_LOADERS && helpersNeeded <= S.MAX_LOADERS)) return { error: `Loading / unloading needs ${S.MIN_LOADERS} to ${S.MAX_LOADERS} persons` };
+  const installation = !isLoad && (body.installation === true || body.installation === 'on' || body.installation === 'yes');
   if (!helpersNeeded && !installation) return { error: 'Ask for at least one helper or an installation person' };
   if (!liveUnit(unitId)) return { error: 'Choose a unit' };
-  const type = TYPES.includes(body.type) ? body.type : 'delivery';
-  let parentId = str(body.parentId) || null;
+  let parentId = isLoad ? null : str(body.parentId) || null;
   if (parentId && !db().deliveries.some((x) => x.id === parentId && x.unitId === unitId)) parentId = null;
   // Machines: list of { label, qty }. Older jobs only had a free-text "machine".
   let items = Array.isArray(body.items) ? body.items : [];
@@ -298,9 +303,19 @@ function readDelivery(body, unitId, opts = {}) {
 }
 const liveUnit = (id) => db().units.find((u) => u.id === id && u.active && !u.deleted);
 
+// A unit's loading / unloading job that has no end time yet blocks the next one.
+function openLoading(unitId, exceptId) {
+  return db().deliveries.find((x) => x.unitId === unitId && x.type === 'loading' && S.isOpen(x) && x.id !== exceptId);
+}
+function loadingBlock(unitId, exceptId) {
+  const o = openLoading(unitId, exceptId);
+  return o ? { error: `The loading / unloading job of ${o.date} (${o.session === 'AM' ? 'morning' : o.session === 'PM' ? 'afternoon' : 'full day'}) has no end time yet. Mark it ✓ Completed with start and end time before booking the next one.` } : null;
+}
+
 function createDelivery(body, unitId, by) {
   const r = readDelivery(body, unitId);
   if (r.error) return r;
+  if (r.value.type === 'loading') { const b = loadingBlock(unitId); if (b) return b; }
   const d = { id: newId('dlv'), ...r.value, status: 'planned', excluded: [], createdBy: by, createdAt: new Date().toISOString() };
   db().deliveries.push(d);
   S.repairDate(db(), d.date);
@@ -314,6 +329,7 @@ function updateDelivery(d, body) {
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   const r = readDelivery({ ...body, type: body.type || d.type, parentId: body.parentId === undefined ? d.parentId : body.parentId }, d.unitId);
   if (r.error) return r;
+  if (r.value.type === 'loading' && d.type !== 'loading') { const b = loadingBlock(d.unitId, d.id); if (b) return b; }
   const oldDate = d.date;
   Object.assign(d, r.value);
   if (oldDate !== d.date) {
@@ -396,7 +412,7 @@ function completeDelivery(d, body, by) {
   if (!S.isOpen(d)) return { error: 'This job is not open' };
   if (d.date > today()) return { error: 'This job is on a later day' };
   let service = null;
-  const after = str(body.serviceAfter);
+  const after = d.type === 'loading' ? '' : str(body.serviceAfter); // no service after loading
   if (after) {
     const date = after === 'date' ? str(body.serviceDate) : addDays(today(), parseInt(after, 10) || 0);
     service = readDelivery(
@@ -422,6 +438,8 @@ function completeDelivery(d, body, by) {
   }
   const times = readTimes(d, body, false);
   if (times.error) return times;
+  // Loading / unloading: start and end time are compulsory.
+  if (d.type === 'loading' && !(times.value.started || d.startedAt)) return { error: 'Start time is compulsory for loading / unloading' };
   const photos = readPhotos(d, body.photos);
   if (photos.error) return photos;
   savePhotos(d, photos.value, by);
@@ -481,6 +499,7 @@ function peopleFor(d) {
 }
 
 function addExtra(d, body, by) {
+  if (d.type === 'loading' && by !== 'admin') return { error: 'Only the admin can change people on loading / unloading' };
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   try {
     S.addExtra(db(), d.id, str(body.personId), { role: str(body.role), reason: str(body.reason, 200), requestedBy: by });
@@ -504,6 +523,7 @@ function cancelExtra(d, body) {
 // Someone is absent: take them off and pick a new name. Every absent is recorded on the job
 // (who, by whom, when, reason) so the admin can see it.
 function replace(d, body, by) {
+  if (d.type === 'loading' && by !== 'admin') return { error: 'Only the admin can change people on loading / unloading' };
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   if (!S.isOpen(d)) return { error: 'This job is completed or cancelled' };
   const personId = str(body.personId);
@@ -540,7 +560,7 @@ function searchJobs(list, q, type) {
     const text = [
       d.customer, d.customerPhone, d.address, d.machine, d.notes, d.completionNote, d.entryBy,
       ...(d.items || []).map((i) => i.label), ...team, unitName(d.unitId),
-      d.date, `${dd}/${m}/${y}`, `${dd}/${m}`, `${+dd}/${+m}`, d.type === 'service' ? 'service' : 'delivery',
+      d.date, `${dd}/${m}/${y}`, `${dd}/${m}`, `${+dd}/${+m}`, d.type === 'service' ? 'service' : d.type === 'loading' ? 'loading unloading' : 'delivery',
     ].join(' ').toLowerCase();
     if (words.every((w) => text.includes(w))) out.push(d);
   }
@@ -712,7 +732,8 @@ admin.get('/stats', (req, res) => {
   const people = db().people.filter((p) => !p.deleted);
   const units = db().units.filter((u) => !u.deleted);
   const rows = people.map((p) => {
-    const mine = list.filter((a) => a.personId === p.id);
+    const all = list.filter((a) => a.personId === p.id);
+    const mine = all.filter((a) => a.role !== 'loader'); // deliveries + services (loading counted on its own)
     const perUnit = {};
     for (const u of units) perUnit[u.id] = mine.filter((a) => a.unitId === u.id).length;
     const leaveDays = range(from, to).filter((date) => S.onLeave(db(), p.id, date)).length;
@@ -727,6 +748,7 @@ admin.get('/stats', (req, res) => {
       helper: mine.filter((a) => a.role === 'helper').length,
       installer: mine.filter((a) => a.role === 'installer').length,
       emergency: mine.filter((a) => a.extra).length,
+      loading: all.filter((a) => a.role === 'loader').length,
       leaveDays,
       perUnit,
     };
