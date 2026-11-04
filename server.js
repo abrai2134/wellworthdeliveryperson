@@ -524,7 +524,6 @@ function cancelExtra(d, body) {
 // Someone is absent: take them off and pick a new name. Every absent is recorded on the job
 // (who, by whom, when, reason) so the admin can see it.
 function replace(d, body, by) {
-  if (d.type === 'loading' && by !== 'admin') return { error: 'Only the admin can change people on loading / unloading' };
   if (d.date < today()) return { error: 'Past deliveries cannot be changed' };
   if (!S.isOpen(d)) return { error: 'This job is completed or cancelled' };
   const personId = str(body.personId);

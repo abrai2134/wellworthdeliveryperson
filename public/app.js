@@ -201,7 +201,7 @@ function deliveryCard(d, who, today) {
   const boss = who === 'admin' || who === 'unit';
   const open = isOpenJob(d);
   const canTeam = boss && open && !past;
-  const lockTeam = d.type === 'loading' && who !== 'admin'; // loading: only the admin changes people
+  const lockTeam = d.type === 'loading' && who !== 'admin'; // loading: units only get "Absent"; Change / Emergency are admin only
   const team = d.team.map((t) => {
     const p = t.person;
     const tags = [
@@ -213,7 +213,7 @@ function deliveryCard(d, who, today) {
     ].join(' ');
     const actions = !canTeam ? '' : [
       lockTeam ? '' : who === 'admin' && !t.extra ? `<button class="link small" data-change="${esc(d.id)}|${t.role}|${t.slot}">Change</button>` : '',
-      p && !lockTeam ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent'}</button>` : '',
+      p && !(lockTeam && t.extra) ? `<button class="link small" data-replace="${esc(d.id)}|${esc(p.id)}|${esc(p.name)}">${t.extra ? 'Remove' : 'Absent'}</button>` : '',
     ].join('');
     return `<div class="drv"><div class="place">${esc(placeName(t, d))}</div>
       <div class="who-line">${p ? `<b>${esc(p.name)}</b> ${roleBadge(p.role)} ${tags}` : open ? `<span class="empty">Nobody free – ${t.role === 'installer' ? (d.type === 'service' ? 'service person' : 'installation person') : 'helper'} needed</span>` : '<span class="muted small">—</span>'}</div>
