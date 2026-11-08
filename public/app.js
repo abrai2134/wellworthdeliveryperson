@@ -1541,12 +1541,25 @@ async function staffAssemblyHtml(wrap) {
   const box = document.createElement('div');
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
       ${r.myMonth && r.myMonth.machines ? `<span class="badge ok">🏆 This month: ${r.myMonth.machines} machine${r.myMonth.machines > 1 ? 's' : ''} · ₹${r.myMonth.incentive}</span>` : ''}
-      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button>` : ''}</div>
+      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button>` : ''}</div>
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
-    ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">⚙️ ${esc(q.model)} × ${q.qty} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
+    ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">${q.type === 'old' ? '📁 Old machine: ' : '⚙️ '}${esc(q.model)} × ${q.qty}${q.type === 'old' ? ` (${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))})` : ''} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
     <div id="asm-board"></div>`;
   wrap.appendChild(box);
   bindAsm(box, '/staff/assembly', r.items, renderStaff);
+  const oldBtn = document.getElementById('asm-old-l');
+  if (oldBtn) oldBtn.onclick = async () => {
+    const models = await loadMachineList();
+    const sel = (name, roles, label) => `<label>${label}</label><select name="${name}"><option value="">— none —</option>${r.crew.filter((x) => roles.includes(x.role)).map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>`;
+    openModal(`<h2>📁 Add old machine</h2><p class="small">A machine you assembled earlier that was missed. It is added to your record (and incentive) <b>after the admin approves</b>.</p>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models" required></div><div><label>Quantity</label><input name="qty" type="number" min="1" max="10" value="1"></div></div>
+      <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
+      ${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
+      ${asmTimesForm({}, '')}
+      <label>Note</label><input name="note" placeholder="e.g. assembled in October, not entered">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send to admin</button></div>`,
+    async (fd) => { await api('/staff/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue() } }); toast('Sent to admin for approval'); renderStaff(); });
+  };
   const req = document.getElementById('asm-req');
   if (req) req.onclick = async () => {
     const models = await loadMachineList();
@@ -1580,8 +1593,9 @@ async function adminAssembly(main) {
       <button id="asm-old">📁 Add old machine</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     <div class="section"><h2>👷 Team leaders by unit</h2><div class="muted small" style="margin-bottom:8px">Machines of a unit are shared equally between its team leaders (each with 1 installation person + 1 helper of the unit). Adding a leader gives out waiting machines at once; removing one sends their unfinished machines back to the others. Give a PIN so the leader can log in.</div>
       <div class="grid">${leaderCards}</div></div>
-    ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
-        <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · ${esc(fmtTime(q.createdAt))}</div></div>
+    ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2><div class="small muted">📝 = wants new machines · 📁 = old machine to add to their record</div>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
+        <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">${q.type === 'old' ? '<span class="badge warn">📁 Old machine</span> ' : '📝 '}⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · sent ${esc(fmtTime(q.createdAt))}</div>
+        ${q.type === 'old' ? `<div class="small muted">Assembled ${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))}${q.installerName ? ' · Installation: ' + esc(q.installerName) : ''}${q.helperName ? ' · Helper: ' + esc(q.helperName) : ''}</div>` : ''}</div>
         <div class="spacer"></div><input type="number" min="1" max="20" value="${q.qty}" data-req-qty="${esc(q.id)}" style="width:70px" title="Quantity to give">
         <button class="small primary" data-req-ok="${esc(q.id)}">Approve</button><button class="small danger" data-req-no="${esc(q.id)}">Reject</button></div>`).join('')}</div>` : ''}
     <div id="asm-board"></div>

@@ -629,7 +629,8 @@ app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
 app.get('/api/lookup/makers', needUnitOrAdmin, (req, res) => {
   res.json({ makers: db().makers });
 });
-app.get('/api/lookup/machines', needUnitOrAdmin, (req, res) => {
+// The model list is also used by team leaders (request / old machine forms).
+app.get('/api/lookup/machines', (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
   res.json({ machines: db().machines.map((m) => m.label), details: db().machines.map((m) => ({ label: m.label, desc: m.desc || '' })) });
 });
 
@@ -1194,6 +1195,10 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     isLeader: p.role === 'leader',
     items: asmList((m) => m.status !== 'cancelled' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id) && recentDone(m)),
     requests: db().assemblyRequests.filter((r) => r.leaderId === p.id).slice(-20).reverse(),
+    // For "Add old machine": installation persons and helpers of the leader's unit.
+    crew: p.role === 'leader'
+      ? db().people.filter((x) => x.active && !x.deleted && x.unitId === p.unitId && ['installer', 'helper', 'both'].includes(x.role)).map((x) => ({ id: x.id, name: x.name, role: x.role }))
+      : [],
     pending: ASM.pendingOf(db(), p.id),
     maxPending: asmSettings().maxPending,
     // My own incentive this month (team leader share or installation share).
@@ -1214,6 +1219,29 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
+// Team leader adds an old machine that was missed out; counted after the admin approves.
+app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can add old machines');
+  const model = str(req.body.model, 120);
+  const qty = parseInt(req.body.qty, 10) || 1;
+  if (!model) return bad(res, 'Enter the model no.');
+  if (qty < 1 || qty > 10) return bad(res, 'Quantity must be 1 to 10');
+  const t = asmTimes({}, req.body, true);
+  if (t.error) return bad(res, t.error);
+  const crewOk = (id, roles) => !id || db().people.some((x) => x.id === id && !x.deleted && roles.includes(x.role));
+  const installerId = str(req.body.installerId) || null;
+  const helperId = str(req.body.helperId) || null;
+  if (!crewOk(installerId, ['installer', 'both'])) return bad(res, 'Choose an installation person');
+  if (!crewOk(helperId, ['helper', 'both'])) return bad(res, 'Choose a helper');
+  db().assemblyRequests.push({
+    id: newId('req'), type: 'old', leaderId: p.id, unitId: p.unitId, model, qty, installerId, helperId,
+    startedAt: t.value.started, completedAt: t.value.completed, note: str(req.body.note, 200), status: 'pending', createdAt: new Date().toISOString(),
+  });
+  store.save();
+  res.json({ ok: true });
+});
+
 app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'leader') return bad(res, 'Only team leaders can request machines');
@@ -1232,7 +1260,7 @@ admin.get('/assembly', (req, res) => {
   res.json({
     items: asmList((m) => m.status !== 'cancelled' && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from)),
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
-      .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId) })),
+      .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
     settings: asmSettings(),
     leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
   });
@@ -1314,6 +1342,22 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
   if (r.status !== 'pending') return bad(res, 'Already decided');
   if (req.params.action === 'reject') {
     r.status = 'rejected';
+  } else if (req.params.action === 'approve' && r.type === 'old') {
+    // Old machine claimed by a team leader: added as already assembled, with its times.
+    const leader = db().people.find((p) => p.id === r.leaderId && !p.deleted);
+    if (!leader) return bad(res, 'That team leader was removed');
+    const qty = Math.max(1, Math.min(10, parseInt(req.body.qty, 10) || r.qty));
+    for (let i = 0; i < qty; i++) {
+      db().assembly.push({
+        id: newId('asm'), unitId: r.unitId, model: r.model, status: 'done', source: 'old', requestId: r.id, leaderId: leader.id,
+        installerId: r.installerId || null, helperId: r.helperId || null,
+        createdAt: r.startedAt, assignedAt: r.startedAt, startedAt: r.startedAt, completedAt: r.completedAt,
+        createdBy: leader.name, entryBy: `${leader.name} (old entry, approved by admin)`, timesEditedBy: leader.name, note: r.note,
+        incentive: ASM.incentiveFor(db(), r.model),
+      });
+    }
+    r.status = 'approved';
+    r.approvedQty = qty;
   } else if (req.params.action === 'approve') {
     const leader = db().people.find((p) => p.id === r.leaderId && p.active && !p.deleted);
     if (!leader) return bad(res, 'That team leader is no longer active');
