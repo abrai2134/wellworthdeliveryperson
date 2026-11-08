@@ -1540,6 +1540,7 @@ async function staffAssemblyHtml(wrap) {
   const me = state.me.id;
   const box = document.createElement('div');
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
+      ${r.myMonth && r.myMonth.machines ? `<span class="badge ok">🏆 This month: ${r.myMonth.machines} machine${r.myMonth.machines > 1 ? 's' : ''} · ₹${r.myMonth.incentive}</span>` : ''}
       ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button>` : ''}</div>
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
     ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">⚙️ ${esc(q.model)} × ${q.qty} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}

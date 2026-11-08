@@ -1196,6 +1196,19 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     requests: db().assemblyRequests.filter((r) => r.leaderId === p.id).slice(-20).reverse(),
     pending: ASM.pendingOf(db(), p.id),
     maxPending: asmSettings().maxPending,
+    // My own incentive this month (team leader share or installation share).
+    myMonth: (() => {
+      const month = today().slice(0, 7);
+      const done = db().assembly.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
+      const asLeader = done.filter((m) => m.leaderId === p.id);
+      const asInst = done.filter((m) => m.installerId === p.id);
+      const asHelp = done.filter((m) => m.helperId === p.id);
+      return {
+        month,
+        machines: asLeader.length + asInst.length + asHelp.length,
+        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0),
+      };
+    })(),
   });
 });
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
