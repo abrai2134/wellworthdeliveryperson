@@ -119,13 +119,13 @@ function bindLogout() {
 
 // ---------- login ----------
 function renderLogin(role = localStorageGet('role') || 'unit') {
-  const labels = { unit: 'Unit login ID', staff: 'Your login ID (usually phone no.)', admin: 'Admin username' };
+  const labels = { unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders – as given by admin)', admin: 'Admin username' };
   $app.innerHTML = `<div class="login">
     <div class="brand"><div class="logo">🚚</div><h1>${esc(state.pub.orgName)}</h1><div class="muted">Delivery helpers &amp; installation team</div></div>
     <div class="card">
       <div class="role-switch">
         <button type="button" data-role="unit" class="${role === 'unit' ? 'on' : ''}"><span>🏢</span>Unit</button>
-        <button type="button" data-role="staff" class="${role === 'staff' ? 'on' : ''}"><span>🧰</span>Helper</button>
+        <button type="button" data-role="staff" class="${role === 'staff' ? 'on' : ''}"><span>🧰</span>Helper / Team leader</button>
         <button type="button" data-role="admin" class="${role === 'admin' ? 'on' : ''}"><span>🔑</span>Admin</button>
       </div>
       <form id="login-form">
@@ -1393,10 +1393,29 @@ function asmCard(m, who, me) {
     ${btns.length ? `<div class="row no-print" style="margin-top:8px">${btns.join('')}</div>` : ''}</div>`;
 }
 
+// Summary: for each team leader, how many of each model are given / assembling / assembled.
+function asmSummary(items) {
+  const groups = {};
+  for (const m of items) {
+    const leader = m.leader ? m.leader.name : '⏳ Waiting for a team leader';
+    const g = (groups[leader] = groups[leader] || { models: {}, open: 0 });
+    const r = (g.models[m.model] = g.models[m.model] || { given: 0, started: 0, done: 0, waiting: 0 });
+    if (m.status === 'done') r.done++;
+    else { g.open++; if (m.status === 'started') r.started++; else if (m.status === 'waiting') r.waiting++; else r.given++; }
+  }
+  const names = Object.keys(groups).sort((a, b) => (a.startsWith('⏳') ? 1 : 0) - (b.startsWith('⏳') ? 1 : 0) || a.localeCompare(b));
+  if (!names.length) return '';
+  const rows = names.flatMap((n) => Object.entries(groups[n].models).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(groups[n].models).length}"><b>${esc(n)}</b>${n.startsWith('⏳') ? '' : `<div class="small muted">${groups[n].open} open</div>`}</td>` : ''}
+      <td>${esc(model)}</td><td class="num"><b>${r.given + r.started + r.waiting + r.done}</b></td><td class="num">${r.waiting || r.given || ''}</td><td class="num">${r.started || ''}</td><td class="num">${r.done || ''}</td></tr>`));
+  return `<div class="card section"><h3 style="margin-top:0">📦 Given to each team leader</h3><div class="table-wrap"><table>
+    <thead><tr><th>Team leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">Assembling</th><th class="num">Assembled</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    <div class="small muted" style="margin-top:4px">Assembled = last 30 days.</div></div>`;
+}
+
 function asmList(items, who, me) {
   const open = items.filter((m) => m.status !== 'done');
   const done = items.filter((m) => m.status === 'done');
-  return `${open.length ? `<div class="grid">${open.map((m) => asmCard(m, who, me)).join('')}</div>` : '<div class="card muted">No machine pending.</div>'}
+  return `${asmSummary(items)}${open.length ? `<div class="grid">${open.map((m) => asmCard(m, who, me)).join('')}</div>` : '<div class="card muted">No machine pending.</div>'}
     ${done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div class="grid" style="margin-top:10px">${done.map((m) => asmCard(m, who, me)).join('')}</div></details>` : ''}`;
 }
 
@@ -1568,6 +1587,7 @@ async function adminAssembly(main) {
     <div class="row section" style="margin-top:16px"><h2 style="margin:0">Machines</h2><div class="spacer"></div>
       <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
       <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
+    ${asmSummary(items)}
     ${items.length ? `<div class="grid">${items.map((m) => asmCard(m, 'admin')).join('')}</div>` : '<div class="card muted">No machines.</div>'}
     <form class="card section" id="asm-set" style="margin-top:16px"><h2>Assembly settings</h2>
       <div class="form-grid">
