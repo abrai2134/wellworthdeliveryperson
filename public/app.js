@@ -4,7 +4,7 @@
 const $app = document.getElementById('app');
 const state = { pub: { orgName: 'Delivery Team', sessions: ['FULL', 'AM', 'PM'], maxHelpers: 8 }, me: null, tab: 'today', admin: null, from: null, to: null };
 const SESSION_NAMES = { FULL: 'Full day', AM: 'Morning', PM: 'Afternoon', EVE: 'Evening' };
-const ROLE_NAMES = { helper: 'Helper', installer: 'Installation person', both: 'Helper + Installation' };
+const ROLE_NAMES = { helper: 'Helper', installer: 'Installation person', both: 'Helper + Installation', leader: 'Team leader (assembly)' };
 
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -43,6 +43,7 @@ function telLink(phone, label) {
   return `<a href="tel:${esc(phone.replace(/[^\d+]/g, ''))}">${esc(label || phone)}</a>`;
 }
 function roleBadge(role) {
+  if (role === 'leader') return '<span class="badge warn">👷 Team leader</span>';
   return role === 'installer' ? '<span class="badge w3">Installation</span>' : role === 'both' ? '<span class="badge w4">Helper + Install</span>' : '<span class="badge w2">Helper</span>';
 }
 function needText(d) {
@@ -794,6 +795,7 @@ async function renderUnit() {
     $app.innerHTML = topbar('Unit: ' + state.me.name) + '<div class="wrap"><div class="loading">Loading…</div></div>';
     bindLogout();
   }
+  if (state.unitMode === 'assembly') return renderUnitAssembly();
   const data = await api('/unit/home');
   const t = data.today;
   state.today = t;
@@ -807,7 +809,7 @@ async function renderUnit() {
   const todayOpen = todays.filter(isOpenJob).length;
   const open = upcoming.filter(isOpenJob).reduce((n, d) => n + d.open, 0);
   const wrap = $app.querySelector('.wrap');
-  wrap.innerHTML = `${searchBarHtml()}<div id="u-normal"><div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
+  wrap.innerHTML = `${unitSwitchHtml('jobs')}${searchBarHtml()}<div id="u-normal"><div class="hero"><div class="label">Today · ${esc(fmtDate(t))}</div>
       <div class="big">${todays.length ? `${todays.length} job${todays.length > 1 ? 's' : ''} today${todayOpen < todays.length ? ` · ${todays.length - todayOpen} completed` : ''}` : 'No job today'}</div>
       <div class="line">${upcoming.filter(isOpenJob).length} open${open ? ` · <b>${open} place(s) still open</b> – use 🆘 Emergency person` : ''}</div>
       <div class="row"><a class="call" href="#" id="book">+ Book delivery / service / loading</a></div></div>
@@ -817,6 +819,7 @@ async function renderUnit() {
   document.getElementById('book').onclick = (e) => { e.preventDefault(); deliveryForm('/unit', null, renderUnit); };
   bindDeliveryButtons(document.getElementById('u-normal'), '/unit', all, renderUnit);
   bindSearch(wrap, '/unit', 'unit', document.getElementById('u-normal'), renderUnit);
+  bindUnitSwitch();
 }
 
 // ---------- staff view ----------
@@ -824,6 +827,13 @@ async function renderStaff() {
   $app.innerHTML = topbar(state.me.name) + '<div class="wrap"><div class="loading">Loading…</div></div>';
   bindLogout();
   const data = await api('/staff/home');
+  if (data.me.role === 'leader') {
+    // Team leaders only do assembly.
+    $app.querySelector('.wrap').innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(data.today))}</div><div class="big">👷 Team leader – assembly</div>
+      <div class="line">Tap ▶ Start when you begin a machine and ✓ Assembled when it is done.</div></div>`;
+    await staffAssemblyHtml($app.querySelector('.wrap'));
+    return;
+  }
   const todays = data.jobs.filter((j) => j.date === data.today);
   const hero = todays.length
     ? todays.map((j) => `<div class="hero${j.status === 'done' ? ' off' : ''}"><div class="label">Today · ${esc(SESSION_NAMES[j.session])} · ${j.type === 'service' ? '🔧 service' : 'delivery'} · you are ${j.myRole === 'installer' ? (j.type === 'service' ? 'service person' : 'installation person') : 'helper'}${j.extra ? ' (emergency)' : ''}${j.status === 'done' ? ' · ✓ completed' : j.status === 'started' ? ' · started' : ''}</div>
@@ -839,6 +849,7 @@ async function renderStaff() {
   $app.querySelector('.wrap').innerHTML = `${hero}
     <div class="row section"><h2 style="margin:0">Next jobs</h2><div class="spacer"></div><span class="badge ok">${data.monthDuties} job${data.monthDuties === 1 ? '' : 's'} this month</span>${data.monthExpense ? ` <span class="badge w4">💰 ₹${data.monthExpense} expense this month</span>` : ''}</div>
     ${later.length ? `<div class="grid">${later.map((d) => deliveryCard(d, 'staff', data.today)).join('')}</div>` : '<div class="card muted">Nothing planned yet.</div>'}`;
+  await staffAssemblyHtml($app.querySelector('.wrap'));
 }
 
 // ---------- admin ----------
@@ -848,6 +859,7 @@ const TABS = [
   ['units', 'Units'],
   ['people', 'Helpers & installers'],
   ['leaves', 'Leave'],
+  ['assembly', '🛠️ Assembly'],
   ['report', 'Report'],
   ['sheet', 'Clients & machines'],
   ['settings', 'Settings'],
@@ -877,7 +889,7 @@ async function renderAdmin() {
     return;
   }
   const main = document.getElementById('main');
-  const views = { today: adminToday, deliveries: adminDeliveries, units: adminUnits, people: adminPeople, leaves: adminLeaves, report: adminReport, sheet: adminSheet, settings: adminSettings };
+  const views = { today: adminToday, deliveries: adminDeliveries, units: adminUnits, people: adminPeople, leaves: adminLeaves, report: adminReport, assembly: adminAssembly, sheet: adminSheet, settings: adminSettings };
   await views[state.tab](main);
 }
 
@@ -991,12 +1003,13 @@ function adminUnits(main) {
       <td>${esc(u.contactName)}<div class="small">${telLink(u.phone)}</div></td>
       <td class="small">${list('helper')}</td>
       <td class="small">${list('installer')}</td>
+      <td class="small">${mine.filter((p) => p.role === 'leader').map((p) => esc(p.name)).join(', ') || '<span class="muted">—</span>'}</td>
       <td><code>${esc(u.username)}</code></td>
       <td>${u.active ? '<span class="badge ok">Active</span>' : '<span class="badge">Inactive</span>'}</td>
       <td><button class="link" data-edit="${esc(u.id)}">Edit</button><button class="link" data-addp="${esc(u.id)}">+ Person</button></td></tr>`;
   }).join('');
   main.innerHTML = `<div class="row section"><h1>Units</h1><div class="spacer"></div><button class="primary" id="add">+ Add unit</button></div>
-    ${A().units.length ? `<div class="table-wrap"><table><thead><tr><th>Unit</th><th>Contact</th><th>Helpers</th><th>Installation</th><th>Login ID</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card muted">No units yet. Add your first unit.</div>'}
+    ${A().units.length ? `<div class="table-wrap"><table><thead><tr><th>Unit</th><th>Contact</th><th>Helpers</th><th>Installation</th><th>Team leaders</th><th>Login ID</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card muted">No units yet. Add your first unit.</div>'}
     <p class="muted small">🆘 = emergency backup person. Everyone is shared across all units for deliveries.</p>`;
   document.getElementById('add').onclick = () => unitForm();
   main.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => unitForm(A().units.find((u) => u.id === b.dataset.edit))));
@@ -1349,6 +1362,257 @@ function adminSettings(main) {
       renderAdmin();
     } catch (ex) { toast(ex.message, true); }
   };
+}
+
+// ---------- assembly (shared by admin / unit / team leader) ----------
+const ASM_STATUS = { waiting: ['warn', '⏳ Waiting for a team leader'], assigned: ['w4', 'Given'], started: ['w3', '🔧 Assembling'], done: ['ok', '✓ Assembled'] };
+const monthNow = () => (state.today || new Date().toISOString().slice(0, 10)).slice(0, 7);
+const ageText = (iso) => { if (!iso) return ''; const d = Math.floor((Date.now() - new Date(iso)) / 86400000); return d <= 0 ? 'today' : d === 1 ? '1 day' : d + ' days'; };
+
+// who: 'admin' | 'unit' | 'staff'; me = staff person id (team leader)
+function asmCard(m, who, me) {
+  const [cls, label] = ASM_STATUS[m.status] || ['', m.status];
+  const canWork = who === 'admin' || who === 'unit' || (who === 'staff' && m.leader && m.leader.id === me);
+  const open = m.status === 'assigned' || m.status === 'started';
+  const work = m.startedAt && m.completedAt ? fmtDur(new Date(m.completedAt) - new Date(m.startedAt)) : '';
+  const p = (x, role) => (x ? `<b>${esc(x.name)}</b>${x.phone ? ' ' + telLink(x.phone) : ''}` : `<span class="muted">${role} –</span>`);
+  const btns = [];
+  if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-asm-start="${esc(m.id)}">▶ Start</button>`);
+  if (canWork && open) btns.push(`<button class="small primary" data-asm-done="${esc(m.id)}">✓ Assembled</button>`);
+  if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
+  if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
+  if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
+  return `<div class="card unit-card${m.status === 'done' ? ' done' : ''}">
+    <div class="row"><div class="name">⚙️ ${esc(m.model)}</div><div class="spacer"></div><span class="badge ${cls}">${label}</span></div>
+    <div class="small muted">${who !== 'unit' ? esc(m.unitName) + ' · ' : ''}${m.source === 'request' ? '📝 requested by team leader · ' : m.source === 'old' ? '📁 old entry · ' : ''}added ${esc(fmtTime(m.createdAt))}${m.entryBy ? ' by ' + esc(m.entryBy) : ''}</div>
+    <div class="small" style="margin-top:6px">👷 Team leader: ${p(m.leader, 'none yet')}</div>
+    <div class="small">🔧 Installation: ${p(m.installer, '')} · 🧰 Helper: ${p(m.helper, '')}</div>
+    <div class="small muted" style="margin-top:4px">🕒 ${m.assignedAt ? `Given ${esc(fmtTime(m.assignedAt))}` : 'Not given yet'}${m.startedAt ? ` · Started ${esc(fmtTime(m.startedAt))}` : ''}${m.completedAt ? ` · <b>Assembled ${esc(fmtTime(m.completedAt))}</b>${work ? ` (${esc(work)})` : ''}` : open ? ` · pending ${esc(ageText(m.assignedAt))}` : ''}${m.timesEditedBy ? ` <span class="badge manual">✎ times by ${esc(m.timesEditedBy)}</span>` : ''}</div>
+    ${m.incentive && (m.incentive.leader || m.incentive.installer) ? `<div class="small expense">🏆 Incentive: team leader ₹${m.incentive.leader} · installation ₹${m.incentive.installer}</div>` : ''}
+    ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
+    ${btns.length ? `<div class="row no-print" style="margin-top:8px">${btns.join('')}</div>` : ''}</div>`;
+}
+
+function asmList(items, who, me) {
+  const open = items.filter((m) => m.status !== 'done');
+  const done = items.filter((m) => m.status === 'done');
+  return `${open.length ? `<div class="grid">${open.map((m) => asmCard(m, who, me)).join('')}</div>` : '<div class="card muted">No machine pending.</div>'}
+    ${done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div class="grid" style="margin-top:10px">${done.map((m) => asmCard(m, who, me)).join('')}</div></details>` : ''}`;
+}
+
+async function asmBoardHtml(month, maxPending) {
+  const b = await api('/assembly/board?month=' + month);
+  const lead = b.leaders.map((r, i) => `<tr><td>${i < 3 && r.done ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.unitName)}</div></td>
+      <td class="num"><b>${r.done}</b></td><td class="num">${r.pending >= (maxPending || 6) ? `<span class="badge bad">${r.pending} – full</span>` : r.pending}${r.oldestPending ? `<div class="small muted">oldest ${esc(ageText(r.oldestPending))}</div>` : ''}</td>
+      <td class="num">${r.avgMinutes == null ? '—' : esc(fmtDur(r.avgMinutes * 60000))}</td><td class="num"><b>₹${r.incentive}</b></td><td class="num muted">${r.allTime}</td></tr>`).join('');
+  const inst = b.installers.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="num">${r.done}</td><td class="num"><b>₹${r.incentive}</b></td></tr>`).join('');
+  return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Assembly scoreboard</h2><div class="spacer"></div><input type="month" id="asm-month" value="${esc(month)}" style="width:auto"></div>
+    <div class="small muted">${b.totalDone} machine(s) assembled in this month${b.waiting ? ` · <span class="badge warn">${b.waiting} waiting for a free team leader</span>` : ''}. Pending = given but not assembled yet (team leaders with ${maxPending || 6} pending get no new machine).</div>
+    ${lead ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Team leader</th><th class="num">Assembled</th><th class="num">Pending</th><th class="num">Avg time</th><th class="num">Incentive</th><th class="num">All time</th></tr></thead><tbody>${lead}</tbody></table></div>` : '<p class="muted">No team leaders yet.</p>'}
+    ${inst ? `<h3 style="margin-top:12px">Installation persons</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Assembled</th><th class="num">Incentive</th></tr></thead><tbody>${inst}</tbody></table></div>` : ''}</div>`;
+}
+
+// Start date + time and end date + time (assembly can take more than a day).
+function asmTimesForm(m, endIso) {
+  const st = localInput(m.startedAt);
+  const en = localInput(endIso);
+  const sDate = st ? st.slice(0, 10) : en.slice(0, 10); // start not pressed: same day as the end, type the time
+  return `<div class="form-grid">
+      <div><label>Start date *</label><input type="date" id="a-sd" value="${esc(sDate)}"></div>
+      <div><label>Start time * ${m.startedAt ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="time" id="a-st" value="${esc(st.slice(11))}"></div>
+      <div><label>End date *</label><input type="date" id="a-ed" value="${esc(en.slice(0, 10))}"></div>
+      <div><label>End time *</label><input type="time" id="a-et" value="${esc(en.slice(11))}"></div>
+    </div>`;
+}
+function asmTimesValue() {
+  const g = (id) => document.getElementById(id).value;
+  if (!g('a-sd') || !g('a-st')) throw new Error('Start date and time are compulsory');
+  if (!g('a-ed') || !g('a-et')) throw new Error('End date and time are compulsory');
+  const s = new Date(`${g('a-sd')}T${g('a-st')}`);
+  const e = new Date(`${g('a-ed')}T${g('a-et')}`);
+  if (!(e > s)) throw new Error('End must be after start');
+  return { startedAt: s.toISOString(), completedAt: e.toISOString() };
+}
+
+function bindAsm(root, base, items, reload) {
+  const find = (id) => items.find((m) => m.id === id);
+  const post = async (url, msg, body) => { try { await api(url, { method: 'POST', body }); toast(msg); reload(); } catch (ex) { toast(ex.message, true); } };
+  root.querySelectorAll('[data-asm-start]').forEach((b) => (b.onclick = () => post(`${base}/${b.dataset.asmStart}/start`, 'Started – time noted')));
+  root.querySelectorAll('[data-asm-done]').forEach((b) => (b.onclick = () => {
+    const m = find(b.dataset.asmDone);
+    openModal(`<h2>Machine assembled</h2><div class="muted">⚙️ ${esc(m.model)} · ${esc(m.unitName)}</div>
+      <p class="small"><b>Start and end date / time are compulsory.</b> Change them if Start was not pressed on time.</p>
+      ${asmTimesForm(m, new Date().toISOString())}
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Assembled</button></div>`,
+    async () => {
+      await api(`${base}/${m.id}/complete`, { method: 'POST', body: asmTimesValue() });
+      toast('Assembled – well done!');
+      reload();
+    });
+  }));
+  root.querySelectorAll('[data-asm-times]').forEach((b) => (b.onclick = () => {
+    const m = find(b.dataset.asmTimes);
+    openModal(`<h2>Edit assembly times</h2><div class="muted">⚙️ ${esc(m.model)} · ${esc(m.leader ? m.leader.name : '')}</div>${asmTimesForm(m, m.completedAt)}
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async () => { await api(`/admin/assembly/${m.id}/times`, { method: 'POST', body: asmTimesValue() }); toast('Times saved'); reload(); });
+  }));
+  root.querySelectorAll('[data-asm-cancel]').forEach((b) => (b.onclick = () => { if (confirm('Cancel this machine?')) post(`/admin/assembly/${b.dataset.asmCancel}/cancel`, 'Cancelled'); }));
+  root.querySelectorAll('[data-asm-assign]').forEach((b) => (b.onclick = () => {
+    const m = find(b.dataset.asmAssign);
+    const ppl = A().people.filter((p) => p.active);
+    const sel = (name, roles, cur, unit) => `<select name="${name}"><option value="">— none —</option>${ppl.filter((p) => roles.includes(p.role)).sort((a, c) => (c.unitId === unit) - (a.unitId === unit) || a.name.localeCompare(c.name)).map((p) => `<option value="${esc(p.id)}" ${cur && cur.id === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.unitName || '—')})</option>`).join('')}</select>`;
+    openModal(`<h2>Change people</h2><div class="muted">⚙️ ${esc(m.model)} · ${esc(m.unitName)}</div>
+      <label>👷 Team leader</label>${sel('leaderId', ['leader'], m.leader, m.unitId)}
+      <label>🔧 Installation person</label>${sel('installerId', ['installer', 'both'], m.installer, m.unitId)}
+      <label>🧰 Helper</label>${sel('helperId', ['helper', 'both'], m.helper, m.unitId)}
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => { await api(`/admin/assembly/${m.id}/assign`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Saved'); reload(); });
+  }));
+}
+
+// Add machines that came for assembly (unit / admin).
+async function asmAddForm(base, reload) {
+  const isAdmin = base === '/admin';
+  const [models, makers] = await Promise.all([loadMachineList(), loadMakers()]);
+  openModal(`<h2>Machines for assembly</h2>
+    ${isAdmin ? `<label>Unit *</label><select name="unitId" required>${A().units.filter((u) => u.active).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>` : ''}
+    <label>✍️ Entry by *</label>${makers.length ? `<select name="entryBy" required><option value="">— choose your name —</option>${makers.map((n) => `<option>${esc(n)}</option>`).join('')}</select>` : '<input name="entryBy" required placeholder="your name">'}
+    <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models" required placeholder="Model no."></div>
+      <div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
+    <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
+    <label>Note</label><input name="note" placeholder="optional">
+    <p class="muted small">Each machine goes to the team leader with the fewest machines (with 1 installation person + 1 helper). A team leader with too many pending gets none – the machine waits for the next free leader.</p>
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
+  async (fd) => { await api(`${base}/assembly`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
+}
+
+// ----- unit: Jobs | Assembly switch -----
+function unitSwitchHtml(cur) {
+  return `<div class="seg no-print"><button data-umode="jobs" class="${cur === 'jobs' ? 'on' : ''}">🚚 Jobs</button><button data-umode="assembly" class="${cur === 'assembly' ? 'on' : ''}">🛠️ Assembly</button></div>`;
+}
+function bindUnitSwitch() {
+  document.querySelectorAll('[data-umode]').forEach((b) => (b.onclick = () => { state.unitMode = b.dataset.umode; renderUnit(); }));
+}
+async function renderUnitAssembly() {
+  const wrap = $app.querySelector('.wrap');
+  const r = await api('/unit/assembly');
+  const month = state.asmMonth || monthNow();
+  wrap.innerHTML = `${unitSwitchHtml('assembly')}
+    <div class="row section"><div><h1 style="margin:0">🛠️ Assembly</h1>
+      <div class="small muted">Team leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending${l.pending >= r.maxPending ? ' – full' : ''})`).join(' · ') || 'none – ask the admin to add team leaders'}</div></div>
+      <div class="spacer"></div><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+    ${asmList(r.items, 'unit')}
+    <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
+  bindUnitSwitch();
+  document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
+  bindAsm(wrap, '/unit/assembly', r.items, renderUnit);
+  await drawBoard(month, r.maxPending, renderUnit);
+}
+async function drawBoard(month, maxPending, reload) {
+  const box = document.getElementById('asm-board');
+  if (!box) return;
+  box.innerHTML = await asmBoardHtml(month, maxPending);
+  document.getElementById('asm-month').onchange = (e) => { state.asmMonth = e.target.value; drawBoard(e.target.value, maxPending, reload); };
+}
+
+// ----- team leader / installation person / helper -----
+async function staffAssemblyHtml(wrap) {
+  const r = await api('/staff/assembly');
+  const me = state.me.id;
+  const box = document.createElement('div');
+  box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
+      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button>` : ''}</div>
+    ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
+    ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">⚙️ ${esc(q.model)} × ${q.qty} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
+    <div id="asm-board"></div>`;
+  wrap.appendChild(box);
+  bindAsm(box, '/staff/assembly', r.items, renderStaff);
+  const req = document.getElementById('asm-req');
+  if (req) req.onclick = async () => {
+    const models = await loadMachineList();
+    openModal(`<h2>Request machines</h2><p class="small">The admin approves before the machines are given to you.</p>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="20" value="1" required></div></div>
+      <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
+      <label>Note</label><input name="note" placeholder="optional">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send request</button></div>`,
+    async (fd) => { await api('/staff/assembly/request', { method: 'POST', body: Object.fromEntries(fd) }); toast('Request sent to admin'); renderStaff(); });
+  };
+  await drawBoard(state.asmMonth || monthNow(), r.maxPending, renderStaff);
+}
+
+// ----- admin tab -----
+async function adminAssembly(main) {
+  const r = await api('/admin/assembly');
+  const f = state.asmFilter || { status: 'open', unit: '' };
+  const items = r.items.filter((m) => (!f.unit || m.unitId === f.unit) && (f.status === 'all' || (f.status === 'open' ? m.status !== 'done' : m.status === f.status)));
+  const pendingReq = r.requests.filter((q) => q.status === 'pending');
+  const s = r.settings;
+  const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
+  main.innerHTML = `<div class="row section"><h1 style="margin:0">🛠️ Assembly</h1><div class="spacer"></div>
+      <button id="asm-old">📁 Add old machine</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+    ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
+        <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · ${esc(fmtTime(q.createdAt))}</div></div>
+        <div class="spacer"></div><input type="number" min="1" max="20" value="${q.qty}" data-req-qty="${esc(q.id)}" style="width:70px" title="Quantity to give">
+        <button class="small primary" data-req-ok="${esc(q.id)}">Approve</button><button class="small danger" data-req-no="${esc(q.id)}">Reject</button></div>`).join('')}</div>` : ''}
+    <div id="asm-board"></div>
+    <div class="row section" style="margin-top:16px"><h2 style="margin:0">Machines</h2><div class="spacer"></div>
+      <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
+      <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
+    ${items.length ? `<div class="grid">${items.map((m) => asmCard(m, 'admin')).join('')}</div>` : '<div class="card muted">No machines.</div>'}
+    <form class="card section" id="asm-set" style="margin-top:16px"><h2>Assembly settings</h2>
+      <div class="form-grid">
+        <div><label>Max pending per team leader</label><input name="maxPending" type="number" min="1" max="50" value="${esc(s.maxPending)}"></div>
+        <div><label>Default incentive – team leader ₹</label><input name="defaultLeader" type="number" min="0" value="${esc(s.defaultLeader)}"></div>
+        <div><label>Default incentive – installation ₹</label><input name="defaultInstaller" type="number" min="0" value="${esc(s.defaultInstaller)}"></div>
+      </div>
+      <h3 style="margin-top:12px">Incentive per model</h3><div class="muted small">Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
+      <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
+      <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
+      <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
+  document.getElementById('asm-add').onclick = () => asmAddForm('/admin', renderAdmin);
+  document.getElementById('af-unit').onchange = (e) => { state.asmFilter = { ...f, unit: e.target.value }; adminAssembly(main); };
+  document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
+  bindAsm(main, '/admin/assembly', r.items, renderAdmin);
+  main.querySelectorAll('[data-req-ok]').forEach((b) => (b.onclick = async () => {
+    const qty = main.querySelector(`[data-req-qty="${b.dataset.reqOk}"]`).value;
+    try { await api(`/admin/assembly/requests/${b.dataset.reqOk}/approve`, { method: 'POST', body: { qty } }); toast('Approved – machines given'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
+  main.querySelectorAll('[data-req-no]').forEach((b) => (b.onclick = async () => {
+    const reason = prompt('Reason (optional):', '');
+    if (reason === null) return;
+    try { await api(`/admin/assembly/requests/${b.dataset.reqNo}/reject`, { method: 'POST', body: { reason } }); toast('Rejected'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
+  // incentive rows
+  const rows = document.getElementById('inc-rows');
+  const addRow = (x) => {
+    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
+    const el = rows.lastElementChild;
+    el.querySelector('button').onclick = () => el.remove();
+  };
+  (s.incentives || []).forEach(addRow);
+  document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '' });
+  const form = document.getElementById('asm-set');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(form));
+    body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value })).filter((x) => x.model.trim());
+    try { await api('/admin/assembly/settings', { method: 'PUT', body }); toast('Assembly settings saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  };
+  document.getElementById('asm-old').onclick = async () => {
+    const ppl = A().people.filter((p) => p.active || true);
+    const sel = (name, roles, label) => `<label>${label}</label><select name="${name}"><option value="">— none —</option>${ppl.filter((p) => roles.includes(p.role)).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.unitName || '—')})</option>`).join('')}</select>`;
+    const models = await loadMachineList();
+    openModal(`<h2>📁 Add old machine (missed earlier)</h2><p class="small">Added as already assembled, with its times. It counts in the scoreboard and incentive of that month.</p>
+      <label>Unit *</label><select name="unitId">${A().units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models3" required></div><div><label>Quantity</label><input name="qty" type="number" min="1" max="50" value="1"></div></div>
+      <datalist id="asm-models3">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
+      ${sel('leaderId', ['leader'], '👷 Team leader *')}${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
+      ${asmTimesForm({}, '')}
+      <label>Note</label><input name="note" placeholder="optional">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
+    async (fd) => { await api('/admin/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue() } }); toast('Old machine added'); renderAdmin(); });
+  };
+  await drawBoard(state.asmMonth || monthNow(), s.maxPending, renderAdmin);
 }
 
 boot();

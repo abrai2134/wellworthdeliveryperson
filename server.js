@@ -72,6 +72,7 @@ const today = () => todayIn(db().settings.timezone);
 // Something changed (people, leave, units): fill gaps from today on, keep existing teams.
 function changed() {
   S.repairFrom(db(), today());
+  require('./lib/assembly').assignWaiting(db(), db().settings.timezone); // a leader may be free / back
   store.save();
 }
 
@@ -870,6 +871,7 @@ admin.post('/people', (req, res) => {
   const p = { id: newId('per'), ...r.value, passHash: r.password ? auth.hashPassword(r.password) : null, baseline: 0, createdAt: today() };
   db().people.push(p);
   if (p.active) S.alignBaseline(db(), p);
+  if (p.active && p.role === 'leader') require('./lib/assembly').alignLeader(db(), p);
   changed();
   res.json({ ok: true });
 });
@@ -880,10 +882,13 @@ admin.put('/people/:id', (req, res) => {
   const r = readPerson(req.body, p);
   if (r.error) return bad(res, r.error);
   const wasActive = p.active;
+  const wasRole = p.role;
   Object.assign(p, r.value);
   if (r.password) p.passHash = auth.hashPassword(r.password);
   if (req.body.removeLogin) p.passHash = null;
   if (!wasActive && p.active) S.alignBaseline(db(), p);
+  // became a team leader or came back: start level with the other leaders
+  if (p.active && p.role === 'leader' && (!wasActive || wasRole !== 'leader')) require('./lib/assembly').alignLeader(db(), p);
   changed();
   res.json({ ok: true });
 });
@@ -1055,6 +1060,278 @@ admin.post('/restore', (req, res) => {
     return bad(res, 'This does not look like a backup file');
   }
   store.replace(data);
+  res.json({ ok: true });
+});
+
+// ---------- assembly ----------
+const ASM = require('./lib/assembly');
+const personName = (id) => (db().people.find((p) => p.id === id) || {}).name || '';
+const personBrief = (id) => {
+  const p = db().people.find((x) => x.id === id);
+  return p ? { id: p.id, name: p.name, phone: p.phone || '', unitName: unitName(p.unitId) } : null;
+};
+function asmView(m) {
+  return {
+    id: m.id,
+    unitId: m.unitId,
+    unitName: unitName(m.unitId),
+    model: m.model,
+    status: m.status,
+    source: m.source || 'new',
+    leader: personBrief(m.leaderId),
+    installer: personBrief(m.installerId),
+    helper: personBrief(m.helperId),
+    createdAt: m.createdAt || null,
+    createdBy: m.createdBy || '',
+    entryBy: m.entryBy || '',
+    assignedAt: m.assignedAt || null,
+    startedAt: m.startedAt || null,
+    completedAt: m.completedAt || null,
+    timesEditedBy: m.timesEditedBy || '',
+    incentive: m.incentive || null,
+    note: m.note || '',
+  };
+}
+const asmSettings = () => ASM.settings(db());
+function asmAssign() {
+  ASM.assignWaiting(db(), db().settings.timezone);
+}
+// Who raised it: a name from the sheet's Made By column when that list exists.
+function readEntry(body) {
+  let entryBy = str(body.entryBy, 80);
+  if (!entryBy) return { error: 'Choose who is raising this request (Entry by)' };
+  if (db().makers.length) {
+    const hit = db().makers.find((n) => n.toLowerCase() === entryBy.toLowerCase());
+    if (!hit) return { error: `"${entryBy}" is not in the Made By list – choose a name from the list` };
+    entryBy = hit;
+  }
+  return { value: entryBy };
+}
+function addMachines(unitId, body, by) {
+  if (!liveUnit(unitId)) return { error: 'Choose a unit' };
+  const model = str(body.model, 120);
+  if (!model) return { error: 'Enter the model no.' };
+  const qty = parseInt(body.qty, 10);
+  if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
+  const e = readEntry(body);
+  if (e.error) return e;
+  const now = new Date().toISOString();
+  for (let i = 0; i < qty; i++) {
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'waiting', source: 'new', createdAt: now, createdBy: by, entryBy: e.value, note: str(body.note, 200) });
+  }
+  asmAssign();
+  store.save();
+  return { value: { id: '' } };
+}
+// Start / end times typed in (or now). Assembly can take a few days.
+function asmTimes(m, body, needStart) {
+  const iso = (v) => { const x = new Date(String(v || '')); return isNaN(x) ? null : x.toISOString(); };
+  const started = body.startedAt ? iso(body.startedAt) : m.startedAt || null;
+  const completed = body.completedAt ? iso(body.completedAt) : new Date().toISOString();
+  if (body.startedAt && !iso(body.startedAt)) return { error: 'Start time is not valid' };
+  if (body.completedAt && !iso(body.completedAt)) return { error: 'End time is not valid' };
+  if (needStart && !started) return { error: 'Start date and time are compulsory' };
+  if (started && started >= completed) return { error: 'Start must be before the end' };
+  if (completed > new Date(Date.now() + 5 * 60000).toISOString()) return { error: 'End time cannot be in the future' };
+  if (started && Date.parse(completed) - Date.parse(started) > 60 * 86400000) return { error: 'Assembly time cannot be more than 60 days' };
+  return { value: { started, completed } };
+}
+function asmStart(m, by) {
+  if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No team leader yet' : 'Already started or finished' };
+  m.status = 'started';
+  m.startedAt = new Date().toISOString();
+  m.startedBy = by;
+  store.save();
+  return { value: m };
+}
+function asmComplete(m, body, by) {
+  if (!['assigned', 'started'].includes(m.status)) return { error: 'This machine is not open' };
+  const t = asmTimes(m, body, true);
+  if (t.error) return t;
+  if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
+  if (body.completedAt) m.timesEditedBy = by;
+  m.startedAt = t.value.started;
+  m.completedAt = t.value.completed;
+  m.status = 'done';
+  m.completedBy = by;
+  m.incentive = ASM.incentiveFor(db(), m.model);
+  asmAssign(); // the leader may now be under the pending limit
+  store.save();
+  return { value: m };
+}
+function asmFind(req, res, check) {
+  const m = db().assembly.find((x) => x.id === req.params.id);
+  if (!m || (check && !check(m))) { res.status(404).json({ error: 'Machine not found' }); return null; }
+  return m;
+}
+const asmList = (filter) => db().assembly.filter(filter).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '')).map(asmView);
+const recentDone = (m, days = 30) => m.status !== 'done' || (m.completedAt || '') >= new Date(Date.now() - days * 86400000).toISOString();
+const monthOf = (q) => (/^\d{4}-\d{2}$/.test(String(q || '')) ? q : today().slice(0, 7));
+
+// Scoreboard: every login can see it, so people can compare.
+app.get('/api/assembly/board', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'Please log in' });
+  res.json(ASM.board(db(), monthOf(req.query.month)));
+});
+
+// Unit
+unit.get('/assembly', (req, res) => {
+  res.json({
+    items: asmList((m) => m.unitId === req.user.id && m.status !== 'cancelled' && recentDone(m)),
+    leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
+    maxPending: asmSettings().maxPending,
+  });
+});
+unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
+unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
+unit.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmComplete(m, req.body, 'unit')); });
+
+// Staff (team leader / installation person / helper)
+app.get('/api/staff/assembly', need('staff'), (req, res) => {
+  const p = req.user.account;
+  res.json({
+    isLeader: p.role === 'leader',
+    items: asmList((m) => m.status !== 'cancelled' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id) && recentDone(m)),
+    requests: db().assemblyRequests.filter((r) => r.leaderId === p.id).slice(-20).reverse(),
+    pending: ASM.pendingOf(db(), p.id),
+    maxPending: asmSettings().maxPending,
+  });
+});
+const myMachine = (req) => (m) => m.leaderId === req.user.id;
+app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
+app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
+app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can request machines');
+  const model = str(req.body.model, 120);
+  const qty = parseInt(req.body.qty, 10);
+  if (!model) return bad(res, 'Enter the model no.');
+  if (!(qty >= 1 && qty <= 20)) return bad(res, 'Quantity must be 1 to 20');
+  db().assemblyRequests.push({ id: newId('req'), leaderId: p.id, unitId: p.unitId, model, qty, note: str(req.body.note, 200), status: 'pending', createdAt: new Date().toISOString() });
+  store.save();
+  res.json({ ok: true });
+});
+
+// Admin
+admin.get('/assembly', (req, res) => {
+  const from = isValid(req.query.from) ? req.query.from : addDays(today(), -30);
+  res.json({
+    items: asmList((m) => m.status !== 'cancelled' && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from)),
+    requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
+      .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId) })),
+    settings: asmSettings(),
+    leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
+  });
+});
+admin.post('/assembly', (req, res) => send(res, addMachines(str(req.body.unitId), req.body, 'admin')));
+admin.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmStart(m, 'admin')); });
+admin.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmComplete(m, req.body, 'admin')); });
+admin.post('/assembly/:id/times', (req, res) => {
+  const m = asmFind(req, res);
+  if (!m) return;
+  if (m.status !== 'done') return bad(res, 'Only finished machines');
+  const t = asmTimes({}, req.body, true);
+  if (t.error) return bad(res, t.error);
+  m.startedAt = t.value.started;
+  m.completedAt = t.value.completed;
+  m.timesEditedBy = 'admin';
+  store.save();
+  res.json({ ok: true });
+});
+admin.post('/assembly/:id/cancel', (req, res) => {
+  const m = asmFind(req, res);
+  if (!m) return;
+  if (m.status === 'done') return bad(res, 'Finished machines cannot be cancelled');
+  m.status = 'cancelled';
+  asmAssign();
+  store.save();
+  res.json({ ok: true });
+});
+// Change team leader / installation person / helper (admin only).
+admin.post('/assembly/:id/assign', (req, res) => {
+  const m = asmFind(req, res);
+  if (!m) return;
+  if (m.status === 'cancelled') return bad(res, 'Cancelled');
+  const ok = (id, roles) => !id || db().people.some((p) => p.id === id && p.active && !p.deleted && roles.includes(p.role));
+  const { leaderId, installerId, helperId } = req.body;
+  if (!ok(leaderId, ['leader'])) return bad(res, 'Choose a team leader');
+  if (!ok(installerId, ['installer', 'both'])) return bad(res, 'Choose an installation person');
+  if (!ok(helperId, ['helper', 'both'])) return bad(res, 'Choose a helper');
+  if (installerId && installerId === helperId) return bad(res, 'Installation person and helper must be different');
+  if (leaderId !== undefined) {
+    m.leaderId = leaderId || null;
+    if (m.status === 'waiting' && m.leaderId) { m.status = 'assigned'; m.assignedAt = new Date().toISOString(); }
+    if (m.status === 'assigned' && !m.leaderId) m.status = 'waiting';
+  }
+  if (installerId !== undefined) m.installerId = installerId || null;
+  if (helperId !== undefined) m.helperId = helperId || null;
+  m.manual = true;
+  asmAssign();
+  store.save();
+  res.json({ ok: true });
+});
+// Old machine that was missed out earlier: added as finished, with its times.
+admin.post('/assembly/old', (req, res) => {
+  const unitId = str(req.body.unitId);
+  if (!liveUnit(unitId)) return bad(res, 'Choose a unit');
+  const model = str(req.body.model, 120);
+  if (!model) return bad(res, 'Enter the model no.');
+  const qty = parseInt(req.body.qty, 10) || 1;
+  if (qty < 1 || qty > 50) return bad(res, 'Quantity must be 1 to 50');
+  const leader = db().people.find((p) => p.id === str(req.body.leaderId) && p.role === 'leader' && !p.deleted);
+  if (!leader) return bad(res, 'Choose the team leader');
+  const t = asmTimes({}, req.body, true);
+  if (t.error) return bad(res, t.error);
+  for (let i = 0; i < qty; i++) {
+    db().assembly.push({
+      id: newId('asm'), unitId, model, status: 'done', source: 'old', leaderId: leader.id,
+      installerId: str(req.body.installerId) || null, helperId: str(req.body.helperId) || null,
+      createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
+      createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
+      incentive: ASM.incentiveFor(db(), model),
+    });
+  }
+  store.save();
+  res.json({ ok: true });
+});
+admin.post('/assembly/requests/:id/:action', (req, res) => {
+  const r = db().assemblyRequests.find((x) => x.id === req.params.id);
+  if (!r) return res.status(404).json({ error: 'Request not found' });
+  if (r.status !== 'pending') return bad(res, 'Already decided');
+  if (req.params.action === 'reject') {
+    r.status = 'rejected';
+  } else if (req.params.action === 'approve') {
+    const leader = db().people.find((p) => p.id === r.leaderId && p.active && !p.deleted);
+    if (!leader) return bad(res, 'That team leader is no longer active');
+    const qty = Math.max(1, Math.min(20, parseInt(req.body.qty, 10) || r.qty));
+    const now = new Date().toISOString();
+    for (let i = 0; i < qty; i++) {
+      const m = { id: newId('asm'), unitId: leader.unitId, model: r.model, status: 'assigned', source: 'request', requestId: r.id, leaderId: leader.id, createdAt: now, assignedAt: now, createdBy: 'admin', entryBy: `${leader.name} (request)`, note: r.note };
+      ASM.pickCrew(db(), m, today());
+      db().assembly.push(m);
+    }
+    r.status = 'approved';
+    r.approvedQty = qty;
+  } else return bad(res, 'Unknown action');
+  r.decidedAt = new Date().toISOString();
+  r.reason = str(req.body.reason, 200);
+  store.save();
+  res.json({ ok: true });
+});
+admin.put('/assembly/settings', (req, res) => {
+  const b = req.body;
+  const cur = asmSettings();
+  const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
+  db().settings.assembly = {
+    maxPending: Math.max(1, Math.min(50, parseInt(b.maxPending, 10) || cur.maxPending)),
+    defaultLeader: b.defaultLeader !== undefined ? money(b.defaultLeader) : cur.defaultLeader,
+    defaultInstaller: b.defaultInstaller !== undefined ? money(b.defaultInstaller) : cur.defaultInstaller,
+    incentives: Array.isArray(b.incentives)
+      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer) })).filter((x) => x.model).slice(0, 300)
+      : cur.incentives,
+  };
+  asmAssign();
+  store.save();
   res.json({ ok: true });
 });
 
