@@ -610,9 +610,12 @@ app.get('/api/photos/:file', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Please log in' });
   if (!PHOTO_NAME.test(file)) return res.status(404).json({ error: 'Not found' });
   const d = db().deliveries.find((x) => (x.photos || []).some((p) => p.file === file));
-  if (!d) return res.status(404).json({ error: 'Not found' });
+  const am = !d && db().assembly.find((x) => (x.photos || []).some((p) => p.file === file)); // machine sticker photo
+  if (!d && !am) return res.status(404).json({ error: 'Not found' });
   const u = req.user;
-  const ok = u.role === 'admin' || (u.role === 'unit' && d.unitId === u.id) || (u.role === 'staff' && db().assignments.some((a) => a.deliveryId === d.id && a.personId === u.id));
+  const ok = d
+    ? u.role === 'admin' || (u.role === 'unit' && d.unitId === u.id) || (u.role === 'staff' && db().assignments.some((a) => a.deliveryId === d.id && a.personId === u.id))
+    : u.role === 'admin' || (u.role === 'unit' && am.unitId === u.id) || (u.role === 'staff' && [am.leaderId, am.installerId, am.helperId].includes(u.id));
   if (!ok) return res.status(403).json({ error: 'Not allowed' });
   res.setHeader('Cache-Control', 'private, max-age=86400');
   res.sendFile(path.join(UPLOAD_DIR, file), (err) => err && !res.headersSent && res.status(404).json({ error: 'Photo file missing' }));
@@ -708,6 +711,7 @@ admin.get('/data', (req, res) => {
     today: t,
     from,
     to,
+    asmRequests: db().assemblyRequests.filter((r) => r.status === 'pending').length, // alert for the admin
     settings: db().settings,
     units: db().units.filter((u) => !u.deleted).map(unitView),
     people: db().people.filter((p) => !p.deleted).map(personView),
@@ -1092,6 +1096,8 @@ function asmView(m) {
     timesEditedBy: m.timesEditedBy || '',
     incentive: m.incentive || null,
     note: m.note || '',
+    photos: (m.photos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at })),
+    diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
   };
 }
 const asmSettings = () => ASM.settings(db());
@@ -1150,6 +1156,11 @@ function asmComplete(m, body, by) {
   if (!['assigned', 'started'].includes(m.status)) return { error: 'This machine is not open' };
   const t = asmTimes(m, body, true);
   if (t.error) return t;
+  // Photo of the machine sticker is compulsory (the admin may skip it).
+  const ph = readPhotos(m, body.photos);
+  if (ph.error) return ph;
+  if (!ph.value.length && !(m.photos || []).length && by !== 'admin') return { error: 'Take a photo of the machine sticker first' };
+  savePhotos(m, ph.value, by);
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1211,7 +1222,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
       return {
         month,
         machines: asLeader.length + asInst.length + asHelp.length,
-        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0),
+        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) - ASM.deductionsOf(db(), p.id, month),
       };
     })(),
   });
@@ -1219,6 +1230,38 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
+// Team leader passes a machine to another team leader of the unit; ₹ per machine is
+// taken off the diverting leader's incentive (Assembly settings → divert deduction).
+app.get('/api/staff/assembly/leaders', need('staff'), (req, res) => {
+  const p = req.user.account;
+  const max = asmSettings().maxPending;
+  res.json({
+    penalty: asmSettings().divertPenalty,
+    leaders: ASM.leadersOf(db(), p.unitId).filter((x) => x.id !== p.id).map((x) => ({ id: x.id, name: x.name, pending: ASM.pendingOf(db(), x.id), full: ASM.pendingOf(db(), x.id) >= max })),
+  });
+});
+app.post('/api/staff/assembly/:id/divert', need('staff'), (req, res) => {
+  const p = req.user.account;
+  const m = asmFind(req, res, (x) => x.leaderId === p.id);
+  if (!m) return;
+  if (!['assigned', 'started'].includes(m.status)) return bad(res, 'Only machines not assembled yet can be diverted');
+  const to = ASM.leadersOf(db(), m.unitId).find((x) => x.id === str(req.body.toLeaderId) && x.id !== p.id);
+  if (!to) return bad(res, 'Choose another team leader of your unit');
+  if (ASM.pendingOf(db(), to.id) >= asmSettings().maxPending) return bad(res, `${to.name} already has ${asmSettings().maxPending} pending machines`);
+  const amount = Math.max(0, Number(asmSettings().divertPenalty) || 0);
+  const at = new Date().toISOString();
+  (m.diverts = m.diverts || []).push({ from: p.id, to: to.id, at, reason: str(req.body.reason, 150), amount });
+  if (amount) db().assemblyDeductions.push({ id: newId('ded'), leaderId: p.id, machineId: m.id, model: m.model, amount, at, reason: 'Diverted to ' + to.name });
+  m.leaderId = to.id;
+  m.status = 'assigned';
+  m.startedAt = null;
+  m.assignedAt = at;
+  m.manual = true; // keep it with the new leader
+  asmAssign();
+  store.save();
+  res.json({ ok: true });
+});
+
 // Team leader adds an old machine that was missed out; counted after the admin approves.
 app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -1384,6 +1427,7 @@ admin.put('/assembly/settings', (req, res) => {
     maxPending: Math.max(1, Math.min(50, parseInt(b.maxPending, 10) || cur.maxPending)),
     defaultLeader: b.defaultLeader !== undefined ? money(b.defaultLeader) : cur.defaultLeader,
     defaultInstaller: b.defaultInstaller !== undefined ? money(b.defaultInstaller) : cur.defaultInstaller,
+    divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
     incentives: Array.isArray(b.incentives)
       ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,

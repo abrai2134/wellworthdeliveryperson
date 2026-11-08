@@ -111,3 +111,12 @@ test('a leader added later gets an equal share of machines not started yet', () 
   assert.equal(A.pendingOf(db, 'S'), 2);
   assert.ok(db.assembly.some((m) => m.leaderId === 'R' && m.status === 'started')); // started one stays
 });
+
+test('divert deduction lowers the leader\'s net incentive in the scoreboard', () => {
+  const db = setup();
+  db.assemblyDeductions = [{ leaderId: 'L1', amount: 100, at: '2026-11-08T10:00:00Z' }, { leaderId: 'L1', amount: 100, at: '2026-10-08T10:00:00Z' }];
+  const b = A.board(db, '2026-11');
+  const l1 = b.leaders.find((r) => r.id === 'L1');
+  assert.equal(l1.deduction, 100);
+  assert.equal(l1.diverted, 1);
+});
