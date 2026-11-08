@@ -1065,6 +1065,7 @@ admin.post('/restore', (req, res) => {
 
 // ---------- assembly ----------
 const ASM = require('./lib/assembly');
+ASM.assignWaiting(db(), db().settings.timezone); // on start: give out anything still waiting
 const personName = (id) => (db().people.find((p) => p.id === id) || {}).name || '';
 const personBrief = (id) => {
   const p = db().people.find((x) => x.id === id);

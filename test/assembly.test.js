@@ -72,3 +72,42 @@ test('a new team leader starts level', () => {
   for (const m of db.assembly) c[m.leaderId] = (c[m.leaderId] || 0) + 1;
   assert.ok(c.L4 <= 2, JSON.stringify(c)); // not flooded with all 4
 });
+
+test('removing a team leader sends their unfinished machines to the others', () => {
+  const db = setup();
+  add(db, 6);
+  db.people.find((p) => p.id === 'L2').deleted = true;
+  A.assignWaiting(db, 'Asia/Kolkata');
+  const c = {};
+  for (const m of db.assembly) c[m.leaderId] = (c[m.leaderId] || 0) + 1;
+  assert.equal(c.L2, undefined);
+  assert.equal((c.L1 || 0) + (c.L3 || 0), 6);
+});
+
+test('machines waiting with no leader are given out when a leader is added', () => {
+  const db = setup();
+  db.people = db.people.filter((p) => p.role !== 'leader');
+  add(db, 4);
+  assert.equal(db.assembly.filter((m) => m.status === 'waiting').length, 4);
+  db.people.push({ id: 'N1', name: 'New 1', role: 'leader', unitId: 'u1', active: true }, { id: 'N2', name: 'New 2', role: 'leader', unitId: 'u1', active: true });
+  A.assignWaiting(db, 'Asia/Kolkata');
+  const c = {};
+  for (const m of db.assembly) c[m.leaderId] = (c[m.leaderId] || 0) + 1;
+  assert.deepEqual(c, { N1: 2, N2: 2 });
+  assert.ok(db.assembly.every((m) => m.installerId && m.helperId));
+});
+
+test('a leader added later gets an equal share of machines not started yet', () => {
+  const db = setup();
+  db.people = db.people.filter((p) => p.role !== 'leader');
+  add(db, 4); // nobody to give to
+  const r = { id: 'R', name: 'Ravi', role: 'leader', unitId: 'u1', active: true };
+  db.people.push(r); A.alignLeader(db, r); A.assignWaiting(db, 'Asia/Kolkata');
+  assert.equal(A.pendingOf(db, 'R'), 4);
+  db.assembly.find((m) => m.leaderId === 'R').status = 'started'; // Ravi already started one
+  const so = { id: 'S', name: 'Sohail', role: 'leader', unitId: 'u1', active: true };
+  db.people.push(so); A.alignLeader(db, so); A.assignWaiting(db, 'Asia/Kolkata');
+  assert.equal(A.pendingOf(db, 'R'), 2);
+  assert.equal(A.pendingOf(db, 'S'), 2);
+  assert.ok(db.assembly.some((m) => m.leaderId === 'R' && m.status === 'started')); // started one stays
+});

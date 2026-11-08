@@ -1065,9 +1065,9 @@ function adminPeople(main) {
   main.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => personForm(A().people.find((p) => p.id === b.dataset.edit))));
 }
 
-function personForm(p, unitId) {
-  const v = p || { name: '', phone: '', role: 'helper', unitId: unitId || (A().units[0] || {}).id || '', backup: false, username: '', canLogin: false, active: true };
-  openModal(`<h2>${p ? 'Edit person' : 'Add helper / installation person'}</h2>
+function personForm(p, unitId, role) {
+  const v = p || { name: '', phone: '', role: role || 'helper', unitId: unitId || (A().units[0] || {}).id || '', backup: false, username: '', canLogin: false, active: true };
+  openModal(`<h2>${p ? 'Edit person' : role === 'leader' ? 'Add team leader' : 'Add helper / installation person'}</h2>
     <div class="form-grid">
       <div><label>Name *</label><input name="name" required value="${esc(v.name)}"></div>
       <div><label>Phone</label><input name="phone" type="tel" value="${esc(v.phone)}"></div>
@@ -1548,8 +1548,18 @@ async function adminAssembly(main) {
   const pendingReq = r.requests.filter((q) => q.status === 'pending');
   const s = r.settings;
   const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
+  const leaderCards = A().units.filter((u) => u.active).map((u) => {
+    const ls = A().people.filter((p) => p.role === 'leader' && p.unitId === u.id);
+    const waitingHere = r.items.filter((m) => m.unitId === u.id && m.status === 'waiting').length;
+    return `<div class="card unit-card"><div class="row"><div class="name">${esc(u.name)}</div><div class="spacer"></div><button class="small" data-add-leader="${esc(u.id)}">+ Add team leader</button></div>
+      ${waitingHere ? `<div class="small"><span class="badge warn">${waitingHere} machine(s) waiting</span>${ls.length ? '' : ' – add a team leader so they can be given out'}</div>` : ''}
+      ${ls.length ? ls.map((p) => { const x = r.leaders.find((l) => l.id === p.id); return `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b>${p.active ? '' : ' <span class="badge">inactive</span>'} ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}</div>
+        <div class="sub-line small"><span class="muted">${x ? x.pending : 0} pending</span>${telLink(p.phone)}<button class="link small" data-edit-leader="${esc(p.id)}">Edit</button><button class="link small danger" data-del-leader="${esc(p.id)}">Remove</button></div></div>`; }).join('') : '<div class="small muted" style="margin-top:6px">No team leader yet.</div>'}</div>`;
+  }).join('');
   main.innerHTML = `<div class="row section"><h1 style="margin:0">🛠️ Assembly</h1><div class="spacer"></div>
       <button id="asm-old">📁 Add old machine</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+    <div class="section"><h2>👷 Team leaders by unit</h2><div class="muted small" style="margin-bottom:8px">Machines of a unit are shared equally between its team leaders (each with 1 installation person + 1 helper of the unit). Adding a leader gives out waiting machines at once; removing one sends their unfinished machines back to the others. Give a PIN so the leader can log in.</div>
+      <div class="grid">${leaderCards}</div></div>
     ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
         <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · ${esc(fmtTime(q.createdAt))}</div></div>
         <div class="spacer"></div><input type="number" min="1" max="20" value="${q.qty}" data-req-qty="${esc(q.id)}" style="width:70px" title="Quantity to give">
@@ -1570,6 +1580,13 @@ async function adminAssembly(main) {
       <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
   document.getElementById('asm-add').onclick = () => asmAddForm('/admin', renderAdmin);
+  main.querySelectorAll('[data-add-leader]').forEach((b) => (b.onclick = () => personForm(null, b.dataset.addLeader, 'leader')));
+  main.querySelectorAll('[data-edit-leader]').forEach((b) => (b.onclick = () => personForm(A().people.find((p) => p.id === b.dataset.editLeader))));
+  main.querySelectorAll('[data-del-leader]').forEach((b) => (b.onclick = async () => {
+    const p = A().people.find((x) => x.id === b.dataset.delLeader);
+    if (!confirm(`Remove team leader ${p.name}? Their unfinished machines go to the other team leaders of the unit. Finished work and incentive stay in the records.`)) return;
+    try { await api(`/admin/people/${p.id}`, { method: 'DELETE' }); toast('Team leader removed – machines shared again'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
   document.getElementById('af-unit').onchange = (e) => { state.asmFilter = { ...f, unit: e.target.value }; adminAssembly(main); };
   document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
