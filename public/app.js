@@ -1779,7 +1779,7 @@ async function adminAssembly(main) {
       <h3 style="margin-top:12px">🛠️ Assembly incentive per model</h3><div class="muted small">Paid when the machine is assembled: Leader ₹ to the team leader, Install ₹ to the installation person. Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
       <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
       <h3 style="margin-top:18px">🚚 Dispatch incentive per model</h3><div class="muted small">Paid to the dispatch person (Dispatch login) for each machine sent to a <b>client</b>. Sending to another unit gets nothing. Models not listed use the default dispatch amount above.</div>
-      <div id="dinc-rows"></div><button type="button" class="link" id="dinc-add">+ Add model</button>
+      <div id="dinc-rows"></div><div class="row"><button type="button" class="link" id="dinc-add">+ Add model</button><button type="button" class="link" id="dinc-all">⧉ Add all assembly models at one rate</button></div>
       <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
   document.getElementById('asm-add').onclick = () => asmAddForm('/admin', renderAdmin);
@@ -1824,21 +1824,43 @@ async function adminAssembly(main) {
   }));
   // incentive rows
   const rows = document.getElementById('inc-rows');
-  const addRow = (x) => {
-    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
-    const el = rows.lastElementChild;
-    el.querySelector('button').onclick = () => el.remove();
+  const addRow = (x, after) => {
+    const html = `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link small ir-copy" title="Copy these rates to a new row">⧉ Copy</button><button type="button" class="link danger ir-del">✕</button></div>`;
+    if (after) after.insertAdjacentHTML('afterend', html); else rows.insertAdjacentHTML('beforeend', html);
+    const el = after ? after.nextElementSibling : rows.lastElementChild;
+    el.querySelector('.ir-del').onclick = () => el.remove();
+    // same rates, new model: pick the model in the new row
+    el.querySelector('.ir-copy').onclick = () => {
+      const n = addRow({ model: '', leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value }, el);
+      n.querySelector('.ir-m').focus();
+    };
+    return el;
   };
-  (s.incentives || []).forEach(addRow);
+  (s.incentives || []).forEach((x) => addRow(x));
   document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '' });
   // dispatch incentive rows (own list)
   const drows = document.getElementById('dinc-rows');
-  const addDRow = (x) => {
-    drows.insertAdjacentHTML('beforeend', `<div class="row dinc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="dr-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Dispatch ₹</span><input class="dr-a" type="number" min="0" value="${esc(x.amount)}" style="width:90px"><button type="button" class="link danger">✕</button></div>`);
-    const el = drows.lastElementChild;
-    el.querySelector('button').onclick = () => el.remove();
+  const addDRow = (x, after) => {
+    const html = `<div class="row dinc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="dr-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Dispatch ₹</span><input class="dr-a" type="number" min="0" value="${esc(x.amount)}" style="width:90px"><button type="button" class="link small dr-copy" title="Copy this rate to a new row">⧉ Copy</button><button type="button" class="link danger dr-del">✕</button></div>`;
+    if (after) after.insertAdjacentHTML('afterend', html); else drows.insertAdjacentHTML('beforeend', html);
+    const el = after ? after.nextElementSibling : drows.lastElementChild;
+    el.querySelector('.dr-del').onclick = () => el.remove();
+    el.querySelector('.dr-copy').onclick = () => { const n = addDRow({ model: '', amount: el.querySelector('.dr-a').value }, el); n.querySelector('.dr-m').focus(); };
+    return el;
   };
-  (s.dispatchIncentives || []).forEach(addDRow);
+  // Every model of the assembly list (not yet in the dispatch list) at one rate.
+  document.getElementById('dinc-all').onclick = () => {
+    const amount = prompt('Dispatch ₹ for all models of the assembly list that are not in the dispatch list yet:', '');
+    if (amount === null || amount === '' || isNaN(Number(amount))) return;
+    const have = new Set([...drows.querySelectorAll('.dr-m')].map((i) => i.value.trim().toUpperCase()).filter(Boolean));
+    let n = 0;
+    for (const i of rows.querySelectorAll('.ir-m')) {
+      const m = i.value.trim();
+      if (m && !have.has(m.toUpperCase())) { addDRow({ model: m, amount }); have.add(m.toUpperCase()); n++; }
+    }
+    toast(n ? `${n} model(s) added at ₹${amount} – press Save settings` : 'All assembly models are already in the dispatch list');
+  };
+  (s.dispatchIncentives || []).forEach((x) => addDRow(x));
   document.getElementById('dinc-add').onclick = () => addDRow({ model: '', amount: '' });
   const form = document.getElementById('asm-set');
   form.onsubmit = async (e) => {
