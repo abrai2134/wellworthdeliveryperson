@@ -1979,11 +1979,39 @@ function clientSearch(input, list) {
   input.onblur = () => setTimeout(() => (list.hidden = true), 200);
 }
 
+// Copy / WhatsApp buttons for any text (handled once, for the whole page).
+function shareButtons(text) {
+  state.shareTexts = state.shareTexts || {};
+  const id = 's' + Math.random().toString(36).slice(2, 10);
+  state.shareTexts[id] = text;
+  return `<button type="button" class="link small" data-share-copy="${id}">📋 Copy</button><button type="button" class="link small" data-share-wa="${id}">📤 WhatsApp</button>`;
+}
+document.addEventListener('click', async (e) => {
+  const c = e.target.closest('[data-share-copy]');
+  const w = e.target.closest('[data-share-wa]');
+  if (c) {
+    const text = (state.shareTexts || {})[c.dataset.shareCopy] || '';
+    try { await navigator.clipboard.writeText(text); toast('Copied – paste in WhatsApp'); } catch { prompt('Copy this text:', text); }
+  } else if (w) window.open('https://wa.me/?text=' + encodeURIComponent((state.shareTexts || {})[w.dataset.shareWa] || ''), '_blank');
+});
+
+function godownText(units) {
+  const day = fmtDate(state.today || new Date().toISOString().slice(0, 10));
+  const total = units.reduce((n, u) => n + u.total, 0);
+  const lines = [units.length === 1 ? `*🏬 ${units[0].unitName} – Godown stock ${day}*` : `*🏬 Godown stock ${day}*`, `Total: ${total} machine${total === 1 ? '' : 's'}`];
+  for (const u of units) {
+    if (units.length > 1) lines.push('', `*${u.unitName}* (${u.total})`);
+    else lines.push('');
+    for (const m of u.models) lines.push(`• ${m.model} × ${m.qty}`);
+  }
+  return lines.join('\n');
+}
+
 function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   const total = stock.reduce((n, u) => n + u.total, 0);
   // One full-width list: a heading per unit, one line per model (qty, oldest, Send).
-  return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span></div>
-    ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head"><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></div>
+  return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
+    ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span></span>
         <span class="godown-qty">${m.qty}</span>${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
