@@ -1406,7 +1406,7 @@ function asmCard(m, who, me) {
     ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
     ${m.crewEdits && m.crewEdits.length ? `<div class="small muted">${m.crewEdits.map((x) => `👥 Team changed by ${esc(x.by)} ${esc(fmtTime(x.at))}: ${x.from.installer !== x.to.installer ? `installation ${esc(x.from.installer || '–')} → ${esc(x.to.installer || '–')}` : ''}${x.from.installer !== x.to.installer && x.from.helper !== x.to.helper ? ', ' : ''}${x.from.helper !== x.to.helper ? `helper ${esc(x.from.helper || '–')} → ${esc(x.to.helper || '–')}` : ''}`).join('<br>')}</div>` : ''}
     ${m.modelEdits && m.modelEdits.length ? `<div class="small muted">${m.modelEdits.map((x) => `✎ Model corrected: <s>${esc(x.from)}</s> → ${esc(x.to)} by ${esc(x.by)} ${esc(fmtTime(x.at))}`).join('<br>')}</div>` : ''}
-    ${m.diverts && m.diverts.length ? `<div class="small absent-log">${m.diverts.map((x) => `↪ Diverted by <b>${esc(x.from)}</b> to <b>${esc(x.to)}</b> ${esc(fmtTime(x.at))}${x.amount ? ` · ₹${x.amount} deducted from ${esc(x.from)}` : ''}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>')}</div>` : ''}
+    ${m.diverts && m.diverts.length ? `<div class="small absent-log">${m.diverts.map((x) => `↪ Diverted by <b>${esc(x.from)}</b> to <b>${esc(x.to)}</b> ${esc(fmtTime(x.at))}${x.amount && who === 'admin' ? ` · ₹${x.amount} deducted from ${esc(x.from)}` : ''}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>')}</div>` : ''}
     ${m.photos && m.photos.length ? `<div class="small" style="margin-top:6px"><b>🏷️ Sticker photo</b><div class="thumbs">${m.photos.map((ph) => `<span class="thumb"><a href="${esc(ph.url)}" target="_blank" rel="noopener"><img src="${esc(ph.url)}" alt="machine sticker" loading="lazy"></a></span>`).join('')}</div></div>` : ''}
     ${btns.length ? `<div class="row no-print" style="margin-top:8px">${btns.join('')}</div>` : ''}</div>`;
 }
@@ -1586,14 +1586,13 @@ function bindAsm(root, base, items, reload) {
     const m = find(b.dataset.asmDivert);
     const r = await api('/staff/assembly/leaders');
     openModal(`<h2>↪ Divert machine</h2><div class="muted">⚙️ ${esc(m.model)}</div>
-      <p class="small"><b>₹${r.penalty} will be deducted from your incentive</b> for diverting this machine.</p>
       <label>Give to team leader *</label>${r.leaders.length ? `<select name="toLeaderId" required><option value="">— choose —</option>${r.leaders.map((l) => `<option value="${esc(l.id)}" ${l.full ? 'disabled' : ''}>${esc(l.name)} – ${l.pending} pending${l.full ? ' (full)' : ''}</option>`).join('')}</select>` : '<div class="error">No other team leader in your unit.</div>'}
       <label>Reason</label><input name="reason" placeholder="e.g. too much work, on leave tomorrow">
-      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Divert (₹${r.penalty} deduction)</button></div>`,
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Divert</button></div>`,
     async (fd) => {
       if (!fd.get('toLeaderId')) throw new Error('Choose a team leader');
       await api(`/staff/assembly/${m.id}/divert`, { method: 'POST', body: Object.fromEntries(fd) });
-      toast(`Diverted – ₹${r.penalty} deducted`);
+      toast('Machine diverted');
       reload();
     });
   }));
