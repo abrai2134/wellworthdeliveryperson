@@ -225,3 +225,7 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .seg button { border: 0; border-radius: 8px; background: none; font-weight: 600; color: var(--muted); }
 .seg button.on { background: var(--brand); color: #fff; }
 .alert-card { background: var(--warn-bg); border-color: #f5d39a; }
+.asm-group { margin-bottom: 12px; }
+.asm-group .dl-head { background: #f3f6fb; }
+.asm-dot { min-width: 26px; text-align: center; flex: none; }
+.asm-row .dr-body > .card { border: 0; }

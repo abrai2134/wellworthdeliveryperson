@@ -1425,11 +1425,37 @@ function asmSummary(items) {
     <div class="small muted" style="margin-top:4px">Assembled = last 30 days.</div></div>`;
 }
 
+// One short line per machine; tap it to open the full card (with its buttons).
+function asmRow(m, who, me) {
+  const [cls, label] = ASM_STATUS[m.status] || ['', m.status];
+  const crew = [m.installer && '🔧 ' + m.installer.name, m.helper && '🧰 ' + m.helper.name].filter(Boolean).join(' · ') || 'no team yet';
+  const when = m.status === 'done'
+    ? `${fmtTime(m.completedAt)}${m.location === 'dispatched' ? ' · 🚚' : m.location === 'godown' ? ' · 🏬' : ''}`
+    : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : (m.status === 'started' ? 'started ' : 'given ') + ageText(m.startedAt || m.assignedAt);
+  return `<details class="done-row asm-row"><summary>
+      <span class="badge ${cls} asm-dot" title="${esc(label)}">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔧' : m.status === 'waiting' ? '⏳' : '•'}</span>
+      <span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
+      <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>${esc(when)}</span>
+    </summary><div class="dr-body">${asmCard(m, who, me)}</div></details>`;
+}
+
+// Machines grouped by team leader (waiting ones last), as compact lists.
+function asmGrouped(list, who, me) {
+  const groups = {};
+  for (const m of list) (groups[m.leader ? m.leader.name : '⏳ Unallocated – waiting for a free team leader'] ||= []).push(m);
+  const names = Object.keys(groups).sort((a, b) => (a.startsWith('⏳') ? 1 : 0) - (b.startsWith('⏳') ? 1 : 0) || a.localeCompare(b));
+  return names.map((n) => {
+    const g = groups[n];
+    const started = g.filter((m) => m.status === 'started').length;
+    return `<div class="done-list asm-group"><div class="dl-head"><b>👷 ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${started ? ` · ${started} assembling` : ''}</span></div>${g.map((m) => asmRow(m, who, me)).join('')}</div>`;
+  }).join('');
+}
+
 function asmList(items, who, me) {
   const open = items.filter((m) => m.status !== 'done');
   const done = items.filter((m) => m.status === 'done');
-  return `${asmSummary(items)}${open.length ? `<div class="grid">${open.map((m) => asmCard(m, who, me)).join('')}</div>` : '<div class="card muted">No machine pending.</div>'}
-    ${done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div class="grid" style="margin-top:10px">${done.map((m) => asmCard(m, who, me)).join('')}</div></details>` : ''}`;
+  return `${asmSummary(items)}${open.length ? asmGrouped(open, who, me) : '<div class="card muted">No machine pending.</div>'}
+    ${done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div style="margin-top:10px">${asmGrouped(done, who, me)}</div></details>` : ''}`;
 }
 
 async function asmBoardHtml(month, maxPending) {
@@ -1726,7 +1752,7 @@ async function adminAssembly(main) {
       <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
       <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
     ${asmSummary(items)}
-    ${items.length ? `<div class="grid">${items.map((m) => asmCard(m, 'admin')).join('')}</div>` : '<div class="card muted">No machines.</div>'}
+    ${items.length ? asmGrouped(items, 'admin') : '<div class="card muted">No machines.</div>'}
     <form class="card section" id="asm-set" style="margin-top:16px"><h2>Assembly settings</h2>
       <div class="form-grid">
         <div><label>Max pending per team leader</label><input name="maxPending" type="number" min="1" max="50" value="${esc(s.maxPending)}"></div>
