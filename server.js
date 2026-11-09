@@ -100,6 +100,7 @@ function findAccount(role, id) {
   if (role === 'admin') return db().admins.find((a) => a.id === id);
   if (role === 'unit') return db().units.find((u) => u.id === id && u.active && !u.deleted);
   if (role === 'staff') return db().people.find((p) => p.id === id && p.active && !p.deleted && p.passHash);
+  if (role === 'dispatch') return db().dispatchers.find((d) => d.id === id && d.active && !d.deleted);
   return null;
 }
 
@@ -139,6 +140,7 @@ app.post('/api/login', (req, res) => {
   if (role === 'admin') account = db().admins.find((a) => a.username.toLowerCase() === username);
   if (role === 'unit') account = db().units.find((u) => !u.deleted && u.active && (u.username || '').toLowerCase() === username);
   if (role === 'staff') account = db().people.find((p) => !p.deleted && p.active && p.passHash && (p.username || '').toLowerCase() === username);
+  if (role === 'dispatch') account = db().dispatchers.find((d) => !d.deleted && d.active && (d.username || '').toLowerCase() === username);
   if (!account || !auth.verifyPassword(password, account.passHash)) {
     rec.count++;
     return res.status(401).json({ error: 'Wrong username or password' });
@@ -623,7 +625,7 @@ app.get('/api/photos/:file', (req, res) => {
 
 // ---------- client & machine lookup (units and admin) ----------
 function needUnitOrAdmin(req, res, next) {
-  if (!req.user || (req.user.role !== 'unit' && req.user.role !== 'admin')) return res.status(401).json({ error: 'Please log in' });
+  if (!req.user || !['unit', 'admin', 'dispatch'].includes(req.user.role)) return res.status(401).json({ error: 'Please log in' });
   next();
 }
 app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
@@ -1102,6 +1104,8 @@ function asmView(m) {
     crewEdits: (m.crewEdits || []).map((x) => ({ by: x.by, at: x.at, from: x.from, to: x.to })),
     dispatchParty: m.dispatchParty || '',
     dispatchedAt: m.dispatchedAt || null,
+    dispatchIncentive: m.dispatchIncentive || null,
+    transfers: (m.transfers || []).map((x) => ({ from: unitName(x.from), to: unitName(x.to), at: x.at, by: x.by })),
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
   };
 }
@@ -1162,6 +1166,7 @@ function readLocation(body) {
   const location = str(body.location);
   if (!['godown', 'dispatched'].includes(location)) return { error: 'Choose where the machine is now: In godown or Dispatched to client' };
   const at = new Date().toISOString();
+  if (location === 'dispatched' && !str(body.party)) return { error: 'Client name is compulsory when the machine is dispatched to a client' };
   return { value: location === 'dispatched' ? { location, dispatchParty: str(body.party, 120), dispatchedAt: at } : { location, godownAt: at } };
 }
 // Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
@@ -1185,7 +1190,9 @@ function asmEditModel(m, body, by, scope) {
 function asmDispatch(m, body, by) {
   if (m.status !== 'done') return { error: 'Only assembled machines can be dispatched' };
   if (m.location === 'dispatched') return { error: 'Already dispatched' };
+  if (!str(body.party)) return { error: 'Client name is compulsory' };
   m.location = 'dispatched';
+  m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
   m.dispatchParty = str(body.party, 120);
   m.dispatchedAt = new Date().toISOString();
   m.dispatchedBy = by;
@@ -1205,6 +1212,7 @@ function asmComplete(m, body, by) {
   if (loc.error) return loc;
   savePhotos(m, ph.value, by);
   Object.assign(m, loc.value);
+  if (m.location === 'dispatched') m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1242,7 +1250,8 @@ unit.get('/assembly', (req, res) => {
 unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
 unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
 unit.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmEditModel(m, req.body, 'unit', (x) => x.unitId === req.user.id)); });
-unit.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmDispatch(m, req.body, 'unit')); });
+unit.post('/assembly/:id/dispatch', (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
+unit.get('/assembly/stock', (req, res) => res.json({ stock: ASM.stock(db(), req.user.id) }));
 unit.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmComplete(m, req.body, 'unit')); });
 
 // Staff (team leader / installation person / helper)
@@ -1268,7 +1277,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
       return {
         month,
         machines: asLeader.length + asInst.length + asHelp.length,
-        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) - ASM.deductionsOf(db(), p.id, month),
+        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) + ASM.dispatchIncentiveOf(db(), p.id, month) - ASM.deductionsOf(db(), p.id, month),
       };
     })(),
   });
@@ -1300,7 +1309,7 @@ app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
 });
 
 app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id)); });
-app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmDispatch(m, req.body, req.user.account.name)); });
+app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
 // Team leader passes a machine to another team leader of the unit; ₹ per machine is
 // taken off the diverting leader's incentive (Assembly settings → divert deduction).
@@ -1371,6 +1380,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
       createdAt: new Date().toISOString(), assignedAt: t.value.started, startedAt: t.value.started, completedAt: completed ? t.value.completed : null,
       createdBy: p.name, entryBy: `${p.name} (old entry)`, timesEditedBy: p.name, note: str(req.body.note, 200), manual: true,
       ...(completed ? { incentive: ASM.incentiveFor(db(), model), ...loc.value } : {}),
+      ...(completed && loc.value.location === 'dispatched' ? { dispatchIncentive: { leader: ASM.incentiveFor(db(), model).dispatch } } : {}),
     };
     made.push(m);
     db().assembly.push(m);
@@ -1400,6 +1410,8 @@ admin.get('/assembly', (req, res) => {
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
       .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
     settings: asmSettings(),
+    stock: ASM.stock(db()),
+    dispatchers: db().dispatchers.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
     leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
   });
 });
@@ -1471,7 +1483,8 @@ admin.post('/assembly/old', (req, res) => {
       createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
       incentive: ASM.incentiveFor(db(), model),
-      ...(['godown', 'dispatched'].includes(req.body.location) ? readLocation(req.body).value : {}),
+      ...(['godown', 'dispatched'].includes(req.body.location) && !readLocation(req.body).error ? readLocation(req.body).value : {}),
+      ...(req.body.location === 'dispatched' && str(req.body.party) ? { dispatchIncentive: { leader: ASM.incentiveFor(db(), model).dispatch } } : {}),
     });
   }
   store.save();
@@ -1526,11 +1539,102 @@ admin.put('/assembly/settings', (req, res) => {
     defaultLeader: b.defaultLeader !== undefined ? money(b.defaultLeader) : cur.defaultLeader,
     defaultInstaller: b.defaultInstaller !== undefined ? money(b.defaultInstaller) : cur.defaultInstaller,
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
+    defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
     incentives: Array.isArray(b.incentives)
-      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer) })).filter((x) => x.model).slice(0, 300)
+      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer), dispatch: money(x && x.dispatch) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
   asmAssign();
+  store.save();
+  res.json({ ok: true });
+});
+
+// ---------- godown dispatch (Dispatch login + admin) ----------
+// Send `qty` machines of a model from a unit's godown (oldest first) to another unit's godown
+// (no incentive) or to a client (client name compulsory; dispatch incentive to the team leader).
+function sendFromGodown(body, by) {
+  const fromUnitId = str(body.fromUnitId);
+  const model = str(body.model, 120);
+  const qty = parseInt(body.qty, 10);
+  const to = str(body.to);
+  if (!fromUnitId || !model) return { error: 'Choose the unit and model' };
+  if (!(qty >= 1)) return { error: 'Enter the quantity' };
+  const avail = db().assembly.filter((m) => m.status === 'done' && m.location === 'godown' && m.unitId === fromUnitId && m.model === model)
+    .sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''));
+  if (qty > avail.length) return { error: `Only ${avail.length} in the godown` };
+  const at = new Date().toISOString();
+  const list = avail.slice(0, qty);
+  if (to === 'unit') {
+    const toUnit = liveUnit(str(body.toUnitId));
+    if (!toUnit) return { error: 'Choose the unit to send to' };
+    if (toUnit.id === fromUnitId) return { error: 'Choose a different unit' };
+    for (const m of list) {
+      (m.transfers = m.transfers || []).push({ from: m.unitId, to: toUnit.id, at, by, note: str(body.note, 200) });
+      m.unitId = toUnit.id;
+      m.godownAt = at;
+    }
+  } else if (to === 'client') {
+    const party = str(body.party, 120);
+    if (!party) return { error: 'Client name is compulsory' };
+    for (const m of list) {
+      m.location = 'dispatched';
+      m.dispatchParty = party;
+      m.dispatchedAt = at;
+      m.dispatchedBy = by;
+      m.dispatchNote = str(body.note, 200);
+      m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
+    }
+  } else return { error: 'Choose: to another unit or to a client' };
+  store.save();
+  return { value: { id: '', count: list.length } };
+}
+// Recent movements for the history list.
+function godownHistory(days = 30) {
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = [];
+  for (const m of db().assembly) {
+    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.leader) || 0 });
+    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '' });
+  }
+  // group same moment + model + destination
+  const g = {};
+  for (const r of rows) { const k = [r.at, r.kind, r.model, r.from, r.to].join('|'); (g[k] ||= { ...r, qty: 0, incentive: 0 }).qty++; g[k].incentive += r.incentive || 0; }
+  return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100);
+}
+app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
+  res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() });
+});
+app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, req.user.account.name)));
+admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
+admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, 'admin')));
+
+// Dispatch logins (admin)
+admin.post('/dispatchers', (req, res) => {
+  const name = str(req.body.name, 80);
+  const username = norm(req.body.username);
+  const password = String(req.body.password || '');
+  if (!name) return bad(res, 'Name is required');
+  if (!/^[a-z0-9._@-]{3,40}$/.test(username)) return bad(res, 'Login ID must be 3-40 letters/numbers (no spaces)');
+  if (db().dispatchers.some((d) => !d.deleted && d.username === username)) return bad(res, 'This login ID is already used');
+  if (password.length < 4) return bad(res, 'Password must be at least 4 characters');
+  db().dispatchers.push({ id: newId('dsp'), name, username, passHash: auth.hashPassword(password), active: true });
+  store.save();
+  res.json({ ok: true });
+});
+admin.put('/dispatchers/:id', (req, res) => {
+  const d = db().dispatchers.find((x) => x.id === req.params.id && !x.deleted);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  if (req.body.name !== undefined) d.name = str(req.body.name, 80) || d.name;
+  if (req.body.active !== undefined) d.active = !!req.body.active;
+  if (req.body.password) { if (String(req.body.password).length < 4) return bad(res, 'Password must be at least 4 characters'); d.passHash = auth.hashPassword(String(req.body.password)); }
+  store.save();
+  res.json({ ok: true });
+});
+admin.delete('/dispatchers/:id', (req, res) => {
+  const d = db().dispatchers.find((x) => x.id === req.params.id && !x.deleted);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  d.deleted = true;
+  d.active = false;
   store.save();
   res.json({ ok: true });
 });

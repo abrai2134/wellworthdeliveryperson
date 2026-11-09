@@ -99,6 +99,7 @@ function render() {
   if (state.me.role === 'admin') return renderAdmin();
   if (state.me.role === 'unit') return renderUnit();
   if (state.me.role === 'staff') return renderStaff();
+  if (state.me.role === 'dispatch') return renderDispatch();
 }
 
 function topbar(subtitle) {
@@ -119,13 +120,14 @@ function bindLogout() {
 
 // ---------- login ----------
 function renderLogin(role = localStorageGet('role') || 'unit') {
-  const labels = { unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders – as given by admin)', admin: 'Admin username' };
+  const labels = { dispatch: 'Dispatch login ID', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders – as given by admin)', admin: 'Admin username' };
   $app.innerHTML = `<div class="login">
     <div class="brand"><div class="logo">🚚</div><h1>${esc(state.pub.orgName)}</h1><div class="muted">Delivery helpers &amp; installation team</div></div>
     <div class="card">
       <div class="role-switch">
         <button type="button" data-role="unit" class="${role === 'unit' ? 'on' : ''}"><span>🏢</span>Unit</button>
         <button type="button" data-role="staff" class="${role === 'staff' ? 'on' : ''}"><span>🧰</span>Helper / Team leader</button>
+        <button type="button" data-role="dispatch" class="${role === 'dispatch' ? 'on' : ''}"><span>🚚</span>Dispatch</button>
         <button type="button" data-role="admin" class="${role === 'admin' ? 'on' : ''}"><span>🔑</span>Admin</button>
       </div>
       <form id="login-form">
@@ -1387,7 +1389,7 @@ function asmCard(m, who, me) {
   if (who === 'staff' && open && m.leader && m.leader.id === me) btns.push(`<button class="small" data-asm-divert="${esc(m.id)}">↪ Divert</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
   if (canWork && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
-  if (canWork && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
+  if (who === 'admin' && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
   return `<div class="card unit-card${m.status === 'done' ? ' done' : ''}">
@@ -1397,6 +1399,8 @@ function asmCard(m, who, me) {
     <div class="small">🔧 Installation: ${p(m.installer, '')} · 🧰 Helper: ${p(m.helper, '')}</div>
     <div class="small muted" style="margin-top:4px">🕒 ${m.assignedAt ? `Given ${esc(fmtTime(m.assignedAt))}` : 'Not given yet'}${m.startedAt ? ` · Started ${esc(fmtTime(m.startedAt))}` : ''}${m.completedAt ? ` · <b>Assembled ${esc(fmtTime(m.completedAt))}</b>${work ? ` (${esc(work)})` : ''}` : open ? ` · pending ${esc(ageText(m.assignedAt))}` : ''}${m.timesEditedBy ? ` <span class="badge manual">✎ times by ${esc(m.timesEditedBy)}</span>` : ''}</div>
     ${m.status === 'done' && m.location ? `<div class="small" style="margin-top:4px">${m.location === 'dispatched' ? `<span class="badge ok">🚚 Dispatched</span>${m.dispatchParty ? ' to <b>' + esc(m.dispatchParty) + '</b>' : ''}${m.dispatchedAt ? ' · ' + esc(fmtTime(m.dispatchedAt)) : ''}` : '<span class="badge w4">🏬 In godown</span>'}</div>` : ''}
+    ${m.transfers && m.transfers.length ? `<div class="small muted">${m.transfers.map((x) => `🏬 Moved ${esc(x.from)} → ${esc(x.to)} ${esc(fmtTime(x.at))}${x.by ? ' by ' + esc(x.by) : ''}`).join('<br>')}</div>` : ''}
+    ${m.dispatchIncentive && m.dispatchIncentive.leader ? `<div class="small expense">🚚 Dispatch incentive (team leader): ₹${m.dispatchIncentive.leader}</div>` : ''}
     ${m.incentive && (m.incentive.leader || m.incentive.installer) ? `<div class="small expense">🏆 Incentive: team leader ₹${m.incentive.leader} · installation ₹${m.incentive.installer}</div>` : ''}
     ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
     ${m.crewEdits && m.crewEdits.length ? `<div class="small muted">${m.crewEdits.map((x) => `👥 Team changed by ${esc(x.by)} ${esc(fmtTime(x.at))}: ${x.from.installer !== x.to.installer ? `installation ${esc(x.from.installer || '–')} → ${esc(x.to.installer || '–')}` : ''}${x.from.installer !== x.to.installer && x.from.helper !== x.to.helper ? ', ' : ''}${x.from.helper !== x.to.helper ? `helper ${esc(x.from.helper || '–')} → ${esc(x.to.helper || '–')}` : ''}`).join('<br>')}</div>` : ''}
@@ -1462,11 +1466,11 @@ async function asmBoardHtml(month, maxPending) {
   const b = await api('/assembly/board?month=' + month);
   const lead = b.leaders.map((r, i) => `<tr><td>${i < 3 && r.done ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.unitName)}</div></td>
       <td class="num"><b>${r.done}</b></td><td class="num">${r.pending >= (maxPending || 6) ? `<span class="badge bad">${r.pending} – full</span>` : r.pending}${r.oldestPending ? `<div class="small muted">oldest ${esc(ageText(r.oldestPending))}</div>` : ''}</td>
-      <td class="num">${r.avgMinutes == null ? '—' : esc(fmtDur(r.avgMinutes * 60000))}</td><td class="num">₹${r.incentive}</td><td class="num">${r.deduction ? `<span class="empty">−₹${r.deduction}</span><div class="small muted">${r.diverted} diverted</div>` : '—'}</td><td class="num"><b>₹${r.incentive - (r.deduction || 0)}</b></td><td class="num muted">${r.allTime}</td></tr>`).join('');
+      <td class="num">${r.avgMinutes == null ? '—' : esc(fmtDur(r.avgMinutes * 60000))}</td><td class="num">₹${r.incentive}</td><td class="num">${r.dispatchIncentive ? '₹' + r.dispatchIncentive : '—'}</td><td class="num">${r.deduction ? `<span class="empty">−₹${r.deduction}</span><div class="small muted">${r.diverted} diverted</div>` : '—'}</td><td class="num"><b>₹${r.incentive + (r.dispatchIncentive || 0) - (r.deduction || 0)}</b></td><td class="num muted">${r.allTime}</td></tr>`).join('');
   const inst = b.installers.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="num">${r.done}</td><td class="num"><b>₹${r.incentive}</b></td></tr>`).join('');
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Assembly scoreboard</h2><div class="spacer"></div><input type="month" id="asm-month" value="${esc(month)}" style="width:auto"></div>
     <div class="small muted">${b.totalDone} machine(s) assembled in this month${b.waiting ? ` · <span class="badge warn">${b.waiting} waiting for a free team leader</span>` : ''}. Pending = given but not assembled yet (team leaders with ${maxPending || 6} pending get no new machine).</div>
-    ${lead ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Team leader</th><th class="num">Assembled</th><th class="num">Pending</th><th class="num">Avg time</th><th class="num">Incentive</th><th class="num">Deduction</th><th class="num">Net</th><th class="num">All time</th></tr></thead><tbody>${lead}</tbody></table></div>` : '<p class="muted">No team leaders yet.</p>'}
+    ${lead ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Team leader</th><th class="num">Assembled</th><th class="num">Pending</th><th class="num">Avg time</th><th class="num">Assembly ₹</th><th class="num">Dispatch ₹</th><th class="num">Deduction</th><th class="num">Net</th><th class="num">All time</th></tr></thead><tbody>${lead}</tbody></table></div>` : '<p class="muted">No team leaders yet.</p>'}
     ${inst ? `<h3 style="margin-top:12px">Installation persons</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Assembled</th><th class="num">Incentive</th></tr></thead><tbody>${inst}</tbody></table></div>` : ''}</div>`;
 }
 
@@ -1475,16 +1479,19 @@ function asmLocationFields() {
   return `<label>📍 Where is the machine now? *</label>
     <div class="row"><label class="check"><input type="radio" name="location" value="godown"> 🏬 In godown</label>
       <label class="check"><input type="radio" name="location" value="dispatched"> 🚚 Dispatched to client</label></div>
-    <div id="a-party-wrap" hidden><label>Client / party name</label><input name="party" list="asm-parties" placeholder="party name (optional)"></div>`;
+    <div id="a-party-wrap" hidden class="lookup"><label>Client name *</label><input name="party" id="a-party" autocomplete="off" placeholder="type party name to search"><div id="a-party-list" class="lookup-list" hidden></div></div>`;
 }
 function bindLocation() {
   const wrap = document.getElementById('a-party-wrap');
+  clientSearch(document.getElementById('a-party'), document.getElementById('a-party-list'));
   modalBody.querySelectorAll('[name=location]').forEach((r) => (r.onchange = () => { wrap.hidden = modalBody.querySelector('[name=location]:checked').value !== 'dispatched'; }));
 }
 function locationValue() {
   const r = modalBody.querySelector('[name=location]:checked');
   if (!r) throw new Error('Choose where the machine is now: In godown or Dispatched to client');
-  return { location: r.value, party: (modalBody.querySelector('[name=party]') || {}).value || '' };
+  const party = ((modalBody.querySelector('[name=party]') || {}).value || '').trim();
+  if (r.value === 'dispatched' && !party) throw new Error('Client name is compulsory when dispatched to a client');
+  return { location: r.value, party };
 }
 
 // Start date + time and end date + time (assembly can take more than a day).
@@ -1641,7 +1648,9 @@ async function renderUnitAssembly() {
       <div class="small muted">Team leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending${l.pending >= r.maxPending ? ' – full' : ''})`).join(' · ') || 'none – ask the admin to add team leaders'}</div></div>
       <div class="spacer"></div><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     ${asmList(r.items, 'unit')}
+    <div id="u-godown"></div>
     <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
+  api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
   bindUnitSwitch();
   document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
   bindAsm(wrap, '/unit/assembly', r.items, renderUnit);
@@ -1748,6 +1757,11 @@ async function adminAssembly(main) {
         <div class="spacer"></div><input type="number" min="1" max="20" value="${q.qty}" data-req-qty="${esc(q.id)}" style="width:70px" title="Quantity to give">
         <button class="small primary" data-req-ok="${esc(q.id)}">Approve</button><button class="small danger" data-req-no="${esc(q.id)}">Reject</button></div>`).join('')}</div>` : ''}
     <div id="asm-board"></div>
+    ${godownHtml(r.stock, true)}
+    <div class="card section"><div class="row"><h2 style="margin:0">🚚 Dispatch logins</h2><div class="spacer"></div><button class="small primary" id="dsp-add">+ Add dispatch login</button></div>
+      <div class="small muted">They log in with the 🚚 Dispatch button, see every unit's godown stock and send machines to another unit or to a client.</div>
+      ${r.dispatchers.length ? r.dispatchers.map((d) => `<div class="drv"><div class="who-line"><b>${esc(d.name)}</b> <code>${esc(d.username)}</code>${d.active ? '' : ' <span class="badge">inactive</span>'}</div>
+        <div class="sub-line small"><button class="link small" data-dsp-pw="${esc(d.id)}">Change password</button><button class="link small" data-dsp-toggle="${esc(d.id)}">${d.active ? 'Make inactive' : 'Make active'}</button><button class="link small danger" data-dsp-del="${esc(d.id)}">Remove</button></div></div>`).join('') : '<div class="small muted" style="margin-top:6px">No dispatch login yet.</div>'}</div>
     <div class="row section" style="margin-top:16px"><h2 style="margin:0">Machines</h2><div class="spacer"></div>
       <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
       <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
@@ -1758,9 +1772,10 @@ async function adminAssembly(main) {
         <div><label>Max pending per team leader</label><input name="maxPending" type="number" min="1" max="50" value="${esc(s.maxPending)}"></div>
         <div><label>Default incentive – team leader ₹</label><input name="defaultLeader" type="number" min="0" value="${esc(s.defaultLeader)}"></div>
         <div><label>Default incentive – installation ₹</label><input name="defaultInstaller" type="number" min="0" value="${esc(s.defaultInstaller)}"></div>
+        <div><label>Default dispatch incentive – team leader ₹</label><input name="defaultDispatch" type="number" min="0" value="${esc(s.defaultDispatch || 0)}"></div>
         <div><label>Deduction per diverted machine ₹</label><input name="divertPenalty" type="number" min="0" value="${esc(s.divertPenalty ?? 100)}"></div>
       </div>
-      <h3 style="margin-top:12px">Incentive per model</h3><div class="muted small">Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
+      <h3 style="margin-top:12px">Incentive per model</h3><div class="muted small">Leader ₹ / Install ₹ = when assembled · Dispatch ₹ = to the team leader when the machine is dispatched to a client (unit transfers get none). Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
       <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
       <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
@@ -1775,6 +1790,25 @@ async function adminAssembly(main) {
   document.getElementById('af-unit').onchange = (e) => { state.asmFilter = { ...f, unit: e.target.value }; adminAssembly(main); };
   document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
+  bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
+  document.getElementById('dsp-add').onclick = () => openModal(`<h2>+ Dispatch login</h2>
+      <label>Name *</label><input name="name" required>
+      <div class="form-grid"><div><label>Login ID *</label><input name="username" autocapitalize="none" required placeholder="e.g. dispatch1"></div><div><label>Password *</label><input name="password" required></div></div>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
+    async (fd) => { await api('/admin/dispatchers', { method: 'POST', body: Object.fromEntries(fd) }); toast('Dispatch login added'); renderAdmin(); });
+  const dsp = (id) => r.dispatchers.find((d) => d.id === id);
+  main.querySelectorAll('[data-dsp-pw]').forEach((b) => (b.onclick = async () => {
+    const pw = prompt(`New password for ${dsp(b.dataset.dspPw).name}:`, '');
+    if (!pw) return;
+    try { await api(`/admin/dispatchers/${b.dataset.dspPw}`, { method: 'PUT', body: { password: pw } }); toast('Password changed'); } catch (ex) { toast(ex.message, true); }
+  }));
+  main.querySelectorAll('[data-dsp-toggle]').forEach((b) => (b.onclick = async () => {
+    try { await api(`/admin/dispatchers/${b.dataset.dspToggle}`, { method: 'PUT', body: { active: !dsp(b.dataset.dspToggle).active } }); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
+  main.querySelectorAll('[data-dsp-del]').forEach((b) => (b.onclick = async () => {
+    if (!confirm(`Remove dispatch login ${dsp(b.dataset.dspDel).name}?`)) return;
+    try { await api(`/admin/dispatchers/${b.dataset.dspDel}`, { method: 'DELETE' }); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
   main.querySelectorAll('[data-req-ok]').forEach((b) => (b.onclick = async () => {
     const qty = main.querySelector(`[data-req-qty="${b.dataset.reqOk}"]`).value;
     try { await api(`/admin/assembly/requests/${b.dataset.reqOk}/approve`, { method: 'POST', body: { qty } }); toast('Approved – machines given'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
@@ -1787,17 +1821,17 @@ async function adminAssembly(main) {
   // incentive rows
   const rows = document.getElementById('inc-rows');
   const addRow = (x) => {
-    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
+    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><span>Dispatch ₹</span><input class="ir-d" type="number" min="0" value="${esc(x.dispatch ?? '')}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
     const el = rows.lastElementChild;
     el.querySelector('button').onclick = () => el.remove();
   };
   (s.incentives || []).forEach(addRow);
-  document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '' });
+  document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '', dispatch: '' });
   const form = document.getElementById('asm-set');
   form.onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(form));
-    body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value })).filter((x) => x.model.trim());
+    body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value, dispatch: el.querySelector('.ir-d').value })).filter((x) => x.model.trim());
     try { await api('/admin/assembly/settings', { method: 'PUT', body }); toast('Assembly settings saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
   };
   document.getElementById('asm-old').onclick = async () => {
@@ -1817,6 +1851,82 @@ async function adminAssembly(main) {
     bindLocation();
   };
   await drawBoard(state.asmMonth || monthNow(), s.maxPending, renderAdmin);
+}
+
+// ---------- godown stock & dispatch ----------
+// Party (client) search box, filled from the Google Sheet party list.
+function clientSearch(input, list) {
+  let timer = null;
+  let found = [];
+  input.oninput = () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { list.hidden = true; return; }
+    timer = setTimeout(async () => {
+      try { found = (await api('/lookup/clients?q=' + encodeURIComponent(q))).clients; } catch { found = []; }
+      list.innerHTML = found.length ? found.map((c, i) => `<button type="button" data-i="${i}"><b>${esc(c.name)}</b><span class="small muted">${esc([c.city, c.phone].filter(Boolean).join(' · '))}</span></button>`).join('') : '<div class="small muted" style="padding:8px">Not in the party list – type the name.</div>';
+      list.hidden = false;
+      list.querySelectorAll('[data-i]').forEach((b) => (b.onclick = () => { input.value = found[Number(b.dataset.i)].name; list.hidden = true; }));
+    }, 200);
+  };
+  input.onblur = () => setTimeout(() => (list.hidden = true), 200);
+}
+
+function godownHtml(stock, canSend, title = '🏬 Godown stock') {
+  const total = stock.reduce((n, u) => n + u.total, 0);
+  return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span></div>
+    ${stock.length ? `<div class="grid godown-grid" style="margin-top:8px">${stock.map((u) => `<div class="card unit-card"><div class="row"><div class="name">${esc(u.unitName)}</div><div class="spacer"></div><b>${u.total}</b></div>
+      <div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Qty</th><th>Oldest</th>${canSend ? '<th></th>' : ''}</tr></thead><tbody>
+      ${u.models.map((m) => `<tr><td>${esc(m.model)}</td><td class="num"><b>${m.qty}</b></td><td class="small muted">${esc(ageText(m.oldest))}</td>${canSend ? `<td><button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button></td>` : ''}</tr>`).join('')}
+      </tbody></table></div></div>`).join('')}</div>` : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
+}
+
+function historyHtml(history) {
+  if (!history || !history.length) return '';
+  return `<div class="card section"><h2>Recent dispatches (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th class="num">Team leader incentive</th></tr></thead><tbody>
+    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}</td><td class="small">${esc(h.by)}</td><td class="num">${h.kind === 'client' ? `₹${h.incentive}${h.leader ? `<div class="small muted">${esc(h.leader)}</div>` : ''}` : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+
+// Send machines from a unit's godown to another unit or to a client.
+function bindSend(root, url, units, reload) {
+  root.querySelectorAll('[data-send]').forEach((b) => (b.onclick = () => {
+    const [unitId, model, max] = b.dataset.send.split('|');
+    const from = units.find((u) => u.id === unitId) || { name: '' };
+    openModal(`<h2>🚚 Send from godown</h2><div class="muted">${esc(from.name)} · ⚙️ ${esc(model)} · ${max} in godown</div>
+      <label>Quantity *</label><input name="qty" type="number" min="1" max="${max}" value="1" required>
+      <label>Send to *</label>
+      <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
+      <div id="s-client" class="lookup"><label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
+        <div class="small muted">The team leader who assembled each machine gets the dispatch incentive.</div></div>
+      <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+        <div class="small muted">Moves to that unit's godown. No incentive for unit transfers.</div></div>
+      <label>Note</label><input name="note" placeholder="optional (e.g. vehicle no., invoice no.)">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send</button></div>`,
+    async (fd) => {
+      const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model };
+      if (body.to === 'client' && !String(body.party || '').trim()) throw new Error('Client name is compulsory');
+      if (body.to === 'unit' && !body.toUnitId) throw new Error('Choose the unit');
+      const r = await api(url, { method: 'POST', body });
+      toast(body.to === 'client' ? `Dispatched ${body.qty} to ${body.party}` : `Sent ${body.qty} to the other unit`);
+      reload();
+    });
+    clientSearch(document.getElementById('s-party'), document.getElementById('s-party-list'));
+    modalBody.querySelectorAll('[name=to]').forEach((r) => (r.onchange = () => {
+      const c = modalBody.querySelector('[name=to]:checked').value === 'client';
+      document.getElementById('s-client').hidden = !c;
+      document.getElementById('s-unit').hidden = c;
+    }));
+  }));
+}
+
+async function renderDispatch() {
+  $app.innerHTML = topbar('🚚 Dispatch: ' + state.me.name) + '<div class="wrap"><div class="loading">Loading…</div></div>';
+  bindLogout();
+  const r = await api('/dispatch/home');
+  const wrap = $app.querySelector('.wrap');
+  wrap.innerHTML = `${godownHtml(r.stock, true)}${historyHtml(r.history)}`;
+  bindSend(wrap, '/dispatch/send', r.units, renderDispatch);
 }
 
 boot();

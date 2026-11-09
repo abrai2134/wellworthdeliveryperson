@@ -104,7 +104,8 @@ label.check input { width: auto; }
 .login { max-width: 400px; margin: 7vh auto 2rem; padding: 0 16px; }
 .login .brand { text-align: center; margin-bottom: 18px; }
 .login .brand .logo { font-size: 2.6rem; }
-.role-switch { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.role-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+@media (max-width: 420px) { .role-switch { grid-template-columns: 1fr 1fr; } }
 .role-switch button { justify-content: center; flex-direction: column; padding: 10px 4px; font-weight: 600; }
 .role-switch button span { font-size: 1.4rem; }
 .role-switch button.on { border-color: var(--brand); background: #eaf2fb; color: var(--brand); }
@@ -229,3 +230,6 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .asm-group .dl-head { background: #f3f6fb; }
 .asm-dot { min-width: 26px; text-align: center; flex: none; }
 .asm-row .dr-body > .card { border: 0; }
+.godown-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+@media (max-width: 420px) { .godown-grid { grid-template-columns: 1fr; } }
+.nowrap { white-space: nowrap; }
