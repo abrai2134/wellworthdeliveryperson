@@ -1114,6 +1114,7 @@ function asmView(m) {
     dispatchedAt: m.dispatchedAt || null,
     dispatchIncentive: m.dispatchIncentive || null,
     transfers: (m.transfers || []).map((x) => ({ from: unitName(x.from), to: unitName(x.to), at: x.at, by: x.by })),
+    bookedParty: m.bookedParty || '',
     dispatchPhotos: (m.dispatchPhotos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at, kind: p.kind })),
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
   };
@@ -1616,8 +1617,11 @@ function sendFromGodown(body, who) {
   const to = str(body.to);
   if (!fromUnitId || !model) return { error: 'Choose the unit and model' };
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
+  const forParty = to === 'client' ? str(body.party).toLowerCase() : '';
   const avail = db().assembly.filter((m) => m.status === 'done' && m.location === 'godown' && m.unitId === fromUnitId && m.model === model)
-    .sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''));
+    // machines booked for this client first, then free stock (oldest first), others' bookings last
+    .sort((a, b) => rank(a) - rank(b) || (a.completedAt || a.godownAt || '').localeCompare(b.completedAt || b.godownAt || ''));
+  function rank(m) { return !m.bookedParty ? 1 : m.bookedParty.toLowerCase() === forParty ? 0 : 2; }
   if (qty > avail.length) return { error: `Only ${avail.length} in the godown` };
   // check the destination before saving any photo
   if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
@@ -1693,9 +1697,14 @@ function addOldStock(body, by) {
   if (!model) return { error: 'Enter the model no.' };
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 200)) return { error: 'Quantity must be 1 to 200' };
+  // compulsory: plain godown stock, or already booked for a client (party name compulsory)
+  const kind = str(body.kind);
+  if (!['godown', 'party'].includes(kind)) return { error: 'Choose: Godown stock or Booked for a client' };
+  const party = kind === 'party' ? str(body.party, 120) : '';
+  if (kind === 'party' && !party) return { error: 'Client (party) name is compulsory' };
   const at = new Date().toISOString();
   for (let i = 0; i < qty; i++) {
-    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, entryBy: `${by} (old stock)`, note: str(body.note, 200) });
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, entryBy: `${by} (old stock)`, note: str(body.note, 200), ...(party ? { bookedParty: party } : {}) });
   }
   store.save();
   return { value: { id: '', count: qty } };

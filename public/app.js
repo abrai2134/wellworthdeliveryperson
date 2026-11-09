@@ -2002,7 +2002,7 @@ function godownText(units) {
   for (const u of units) {
     if (units.length > 1) lines.push('', `*${u.unitName}* (${u.total})`);
     else lines.push('');
-    for (const m of u.models) lines.push(`• ${m.model} × ${m.qty}`);
+    for (const m of u.models) lines.push(`• ${m.model} × ${m.qty}${(m.booked || []).length ? ` (booked: ${m.booked.map((x) => `${x.party} ${x.qty}`).join(', ')})` : ''}`);
   }
   return lines.join('\n');
 }
@@ -2012,7 +2012,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   // One full-width list: a heading per unit, one line per model (qty, oldest, Send).
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
-      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span></span>
+      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
         <span class="godown-qty">${m.qty}</span>${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
@@ -2072,11 +2072,22 @@ async function oldStockForm(url, units, reload) {
   const models = await loadMachineList();
   openModal(`<h2>📦 Add old stock</h2><p class="small">Machines already lying in a unit's godown. They are added to the godown stock and can then be sent. No assembly incentive; the dispatch incentive applies when sent to a client.</p>
     <label>Unit *</label><select name="unitId" required><option value="">— choose —</option>${units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+    <label>Stock type *</label>
+    <div class="row"><label class="check"><input type="radio" name="kind" value="godown"> 🏬 Godown stock</label><label class="check"><input type="radio" name="kind" value="party"> 👤 Booked for a client</label></div>
+    <div id="os-party-wrap" class="lookup" hidden><label>Client (party) name *</label><input name="party" id="os-party" autocomplete="off" placeholder="type party name to search"><div id="os-party-list" class="lookup-list" hidden></div></div>
     <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="os-models" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="200" value="1" required></div></div>
     <datalist id="os-models">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
     <label>Note</label><input name="note" placeholder="optional (e.g. stock count 9 Nov)">
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add to godown</button></div>`,
-  async (fd) => { await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast(`${fd.get('qty')} added to godown`); reload(); });
+  async (fd) => {
+    if (!fd.get('kind')) throw new Error('Choose: Godown stock or Booked for a client');
+    if (fd.get('kind') === 'party' && !String(fd.get('party') || '').trim()) throw new Error('Client (party) name is compulsory');
+    await api(url, { method: 'POST', body: Object.fromEntries(fd) });
+    toast(`${fd.get('qty')} added to godown`);
+    reload();
+  });
+  clientSearch(document.getElementById('os-party'), document.getElementById('os-party-list'));
+  modalBody.querySelectorAll('[name=kind]').forEach((r) => (r.onchange = () => { document.getElementById('os-party-wrap').hidden = modalBody.querySelector('[name=kind]:checked').value !== 'party'; }));
 }
 
 async function renderDispatch() {
