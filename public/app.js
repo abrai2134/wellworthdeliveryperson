@@ -1518,27 +1518,15 @@ async function asmBoardHtml(month, maxPending) {
 }
 
 // Where the machine is after assembly.
+// An assembled machine always goes into godown stock. Sending it to a client is done
+// only from the Dispatch login (with dispatch photo), once it is in the godown.
 function asmLocationFields() {
-  return `<label>📍 Where is the machine now? *</label>
-    <div class="row"><label class="check"><input type="radio" name="location" value="godown"> 🏬 In godown</label>
-      <label class="check"><input type="radio" name="location" value="dispatched"> 🚚 Dispatched to client</label></div>
-    <div id="a-party-wrap" hidden class="lookup"><label>Client name *</label><input name="party" id="a-party" autocomplete="off" placeholder="type party name to search"><div id="a-party-list" class="lookup-list" hidden></div>
-      <label>📷 Dispatch photo *</label><div class="muted small">Photo of the machine sent to the client (vehicle / challan).</div><div id="a-dphotos"></div></div>`;
+  return `<label>📍 Where is the machine now?</label>
+    <div class="note small">🏬 It goes into <b>godown stock</b>. Dispatch to a client is done from the 🚚 Dispatch login.</div>`;
 }
-function bindLocation() {
-  const wrap = document.getElementById('a-party-wrap');
-  state.getDispatchPhotos = photoPicker(document.getElementById('a-dphotos'));
-  clientSearch(document.getElementById('a-party'), document.getElementById('a-party-list'));
-  modalBody.querySelectorAll('[name=location]').forEach((r) => (r.onchange = () => { wrap.hidden = modalBody.querySelector('[name=location]:checked').value !== 'dispatched'; }));
-}
+function bindLocation() {}
 function locationValue() {
-  const r = modalBody.querySelector('[name=location]:checked');
-  if (!r) throw new Error('Choose where the machine is now: In godown or Dispatched to client');
-  const party = ((modalBody.querySelector('[name=party]') || {}).value || '').trim();
-  if (r.value === 'dispatched' && !party) throw new Error('Client name is compulsory when dispatched to a client');
-  const dispatchPhotos = r.value === 'dispatched' && state.getDispatchPhotos ? state.getDispatchPhotos() : [];
-  if (r.value === 'dispatched' && !dispatchPhotos.length && state.me.role !== 'admin') throw new Error('Take a dispatch photo (machine sent to the client)');
-  return { location: r.value, party, dispatchPhotos };
+  return { location: 'godown' };
 }
 
 // Start date + time and end date + time (assembly can take more than a day).

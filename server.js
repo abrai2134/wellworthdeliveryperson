@@ -1172,33 +1172,14 @@ function asmStart(m, by) {
   return { value: m };
 }
 // Where the machine is after assembly: in the godown or dispatched to a client.
+// Assembled machines go into godown stock; dispatch to a client is done only from the
+// Dispatch login (Send from godown), so it is never accepted here.
 function readLocation(body) {
-  const location = str(body.location);
-  if (!['godown', 'dispatched'].includes(location)) return { error: 'Choose where the machine is now: In godown or Dispatched to client' };
-  const at = new Date().toISOString();
-  if (location === 'dispatched' && !str(body.party)) return { error: 'Client name is compulsory when the machine is dispatched to a client' };
-  return { value: location === 'dispatched' ? { location, dispatchParty: str(body.party, 120), dispatchedAt: at } : { location, godownAt: at } };
+  const location = str(body.location) || 'godown';
+  if (location !== 'godown') return { error: 'Dispatch to a client is done from the Dispatch login, after the machine is in the godown' };
+  return { value: { location, godownAt: new Date().toISOString() } };
 }
 // Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
-// "Dispatched to client" chosen while completing / adding a machine: dispatch photo is
-// compulsory (admin may skip). Returns the photos to save, or an error.
-function readDispatchPhoto(body, by) {
-  if (str(body.location) !== 'dispatched') return { value: [] };
-  const ph = readPhotos({ photos: [] }, body.dispatchPhotos);
-  if (ph.error) return ph;
-  if (!ph.value.length && by !== 'admin') return { error: 'Take a dispatch photo (machine sent to the client)' };
-  return ph;
-}
-function attachDispatchPhoto(machines, photos, by) {
-  if (!photos.length || !machines.length) return;
-  const holder = { id: machines[0].id, photos: [] };
-  savePhotos(holder, photos, by);
-  for (const m of machines) {
-    m.dispatchPhotos = [...(m.dispatchPhotos || []), ...holder.photos.map((p) => ({ ...p, kind: 'client', at: m.dispatchedAt || p.at }))];
-    m.dispatchedBy = m.dispatchedBy || by;
-  }
-}
-
 function asmEditModel(m, body, by, scope) {
   const model = str(body.model, 120);
   if (!model) return { error: 'Enter the model no.' };
@@ -1246,11 +1227,8 @@ function asmComplete(m, body, by) {
   if (!ph.value.length && !(m.photos || []).length && by !== 'admin') return { error: 'Take a photo (JPG) of the machine sticker first' };
   const loc = readLocation(body);
   if (loc.error) return loc;
-  const dph = readDispatchPhoto(body, by);
-  if (dph.error) return dph;
   savePhotos(m, ph.value, by);
   Object.assign(m, loc.value);
-  if (m.location === 'dispatched') { m.dispatchedBy = by; attachDispatchPhoto([m], dph.value, by); }
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1409,8 +1387,6 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
   if (t.error) return bad(res, t.error);
   const loc = completed ? readLocation(req.body) : { value: {} };
   if (loc.error) return bad(res, loc.error);
-  const dph = completed ? readDispatchPhoto(req.body, p.name) : { value: [] };
-  if (dph.error) return bad(res, dph.error);
   const ph = completed ? readPhotos({ photos: [] }, req.body.photos) : { value: [] };
   if (ph.error) return bad(res, ph.error);
   if (completed && !ph.value.length) return bad(res, 'Take a photo (JPG) of the machine sticker');
@@ -1426,7 +1402,6 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
     db().assembly.push(m);
   }
   if (completed) { savePhotos(made[0], ph.value, p.name); for (const m of made.slice(1)) m.photos = made[0].photos.slice(); }
-  if (completed && loc.value.location === 'dispatched') attachDispatchPhoto(made, dph.value, p.name);
   store.save();
   res.json({ ok: true });
 });
@@ -1528,7 +1503,7 @@ admin.post('/assembly/old', (req, res) => {
       createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
       incentive: ASM.incentiveFor(db(), model),
-      ...(['godown', 'dispatched'].includes(req.body.location) && !readLocation(req.body).error ? readLocation(req.body).value : {}),
+      location: 'godown', godownAt: new Date().toISOString(),
     });
   }
   store.save();
