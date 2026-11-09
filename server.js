@@ -612,12 +612,12 @@ app.get('/api/photos/:file', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Please log in' });
   if (!PHOTO_NAME.test(file)) return res.status(404).json({ error: 'Not found' });
   const d = db().deliveries.find((x) => (x.photos || []).some((p) => p.file === file));
-  const am = !d && db().assembly.find((x) => (x.photos || []).some((p) => p.file === file)); // machine sticker photo
+  const am = !d && db().assembly.find((x) => [...(x.photos || []), ...(x.dispatchPhotos || [])].some((p) => p.file === file)); // sticker / dispatch photo
   if (!d && !am) return res.status(404).json({ error: 'Not found' });
   const u = req.user;
   const ok = d
     ? u.role === 'admin' || (u.role === 'unit' && d.unitId === u.id) || (u.role === 'staff' && db().assignments.some((a) => a.deliveryId === d.id && a.personId === u.id))
-    : u.role === 'admin' || (u.role === 'unit' && am.unitId === u.id) || (u.role === 'staff' && [am.leaderId, am.installerId, am.helperId].includes(u.id));
+    : u.role === 'admin' || u.role === 'dispatch' || (u.role === 'unit' && (am.unitId === u.id || (am.transfers || []).some((t) => t.from === u.id))) || (u.role === 'staff' && [am.leaderId, am.installerId, am.helperId].includes(u.id));
   if (!ok) return res.status(403).json({ error: 'Not allowed' });
   res.setHeader('Cache-Control', 'private, max-age=86400');
   res.sendFile(path.join(UPLOAD_DIR, file), (err) => err && !res.headersSent && res.status(404).json({ error: 'Photo file missing' }));
@@ -1106,6 +1106,7 @@ function asmView(m) {
     dispatchedAt: m.dispatchedAt || null,
     dispatchIncentive: m.dispatchIncentive || null,
     transfers: (m.transfers || []).map((x) => ({ from: unitName(x.from), to: unitName(x.to), at: x.at, by: x.by })),
+    dispatchPhotos: (m.dispatchPhotos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at, kind: p.kind })),
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
   };
 }
@@ -1560,8 +1561,20 @@ function sendFromGodown(body, who) {
   const avail = db().assembly.filter((m) => m.status === 'done' && m.location === 'godown' && m.unitId === fromUnitId && m.model === model)
     .sort((a, b) => (a.completedAt || '').localeCompare(b.completedAt || ''));
   if (qty > avail.length) return { error: `Only ${avail.length} in the godown` };
+  // check the destination before saving any photo
+  if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
+  if (to === 'unit' && (!liveUnit(str(body.toUnitId)) || str(body.toUnitId) === fromUnitId)) return { error: 'Choose a different unit to send to' };
+  // Dispatch photo (vehicle / loaded machine / challan) is compulsory for Dispatch logins.
+  const ph = readPhotos({ photos: [] }, body.photos);
+  if (ph.error) return ph;
+  if (!ph.value.length && who.dispatcherId) return { error: 'Take a dispatch photo first' };
   const at = new Date().toISOString();
   const list = avail.slice(0, qty);
+  if (!['unit', 'client'].includes(to)) return { error: 'Choose: to another unit or to a client' };
+  // one copy of the photo, shared by every machine in this dispatch
+  let photoRefs = [];
+  if (ph.value.length) { const holder = { id: list[0].id, photos: [] }; savePhotos(holder, ph.value, by); photoRefs = holder.photos.map((p) => ({ ...p, kind: to })); }
+  for (const m of list) if (photoRefs.length) m.dispatchPhotos = [...(m.dispatchPhotos || []), ...photoRefs];
   if (to === 'unit') {
     const toUnit = liveUnit(str(body.toUnitId));
     if (!toUnit) return { error: 'Choose the unit to send to' };
@@ -1591,8 +1604,9 @@ function godownHistory(days = 30) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const rows = [];
   for (const m of db().assembly) {
-    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0 });
-    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '' });
+    const photoAt = (at, kind) => ((m.dispatchPhotos || []).find((p) => p.at === at && p.kind === kind) || (m.dispatchPhotos || []).find((p) => p.kind === kind && Math.abs(Date.parse(p.at) - Date.parse(at)) < 60000) || {}).file;
+    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0, photo: photoAt(m.dispatchedAt, 'client') });
+    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '', photo: photoAt(t.at, 'unit') });
   }
   // group same moment + model + destination
   const g = {};

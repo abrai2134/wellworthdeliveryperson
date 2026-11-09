@@ -1400,6 +1400,7 @@ function asmCard(m, who, me) {
     <div class="small muted" style="margin-top:4px">🕒 ${m.assignedAt ? `Given ${esc(fmtTime(m.assignedAt))}` : 'Not given yet'}${m.startedAt ? ` · Started ${esc(fmtTime(m.startedAt))}` : ''}${m.completedAt ? ` · <b>Assembled ${esc(fmtTime(m.completedAt))}</b>${work ? ` (${esc(work)})` : ''}` : open ? ` · pending ${esc(ageText(m.assignedAt))}` : ''}${m.timesEditedBy ? ` <span class="badge manual">✎ times by ${esc(m.timesEditedBy)}</span>` : ''}</div>
     ${m.status === 'done' && m.location ? `<div class="small" style="margin-top:4px">${m.location === 'dispatched' ? `<span class="badge ok">🚚 Dispatched</span>${m.dispatchParty ? ' to <b>' + esc(m.dispatchParty) + '</b>' : ''}${m.dispatchedAt ? ' · ' + esc(fmtTime(m.dispatchedAt)) : ''}` : '<span class="badge w4">🏬 In godown</span>'}</div>` : ''}
     ${m.transfers && m.transfers.length ? `<div class="small muted">${m.transfers.map((x) => `🏬 Moved ${esc(x.from)} → ${esc(x.to)} ${esc(fmtTime(x.at))}${x.by ? ' by ' + esc(x.by) : ''}`).join('<br>')}</div>` : ''}
+    ${m.dispatchPhotos && m.dispatchPhotos.length ? `<div class="small" style="margin-top:6px"><b>🚚 Dispatch photo</b><div class="thumbs">${m.dispatchPhotos.map((ph) => `<span class="thumb"><a href="${esc(ph.url)}" target="_blank" rel="noopener"><img src="${esc(ph.url)}" alt="dispatch photo" loading="lazy"></a></span>`).join('')}</div></div>` : ''}
     ${m.dispatchIncentive && m.dispatchIncentive.amount ? `<div class="small expense">🚚 Dispatch incentive: ₹${m.dispatchIncentive.amount} to ${esc(m.dispatchIncentive.name || '')}</div>` : ''}
     ${m.incentive && (m.incentive.leader || m.incentive.installer) ? `<div class="small expense">🏆 Incentive: team leader ₹${m.incentive.leader} · installation ₹${m.incentive.installer}</div>` : ''}
     ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
@@ -1886,8 +1887,8 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
 
 function historyHtml(history) {
   if (!history || !history.length) return '';
-  return `<div class="card section"><h2>Recent dispatches (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th class="num">Dispatch incentive</th></tr></thead><tbody>
-    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}</td><td class="small">${esc(h.by)}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
+  return `<div class="card section"><h2>Recent dispatches (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th>Photo</th><th class="num">Dispatch incentive</th></tr></thead><tbody>
+    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}</td><td class="small">${esc(h.by)}</td><td>${h.photo ? `<a href="/api/photos/${esc(h.photo)}" target="_blank" rel="noopener"><img src="/api/photos/${esc(h.photo)}" alt="dispatch photo" style="width:44px;height:44px;object-fit:cover;border-radius:6px"></a>` : '<span class="muted small">—</span>'}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 
@@ -1904,10 +1905,14 @@ function bindSend(root, url, units, reload) {
         <div class="small muted">You get the dispatch incentive for each machine sent to a client.</div></div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
         <div class="small muted">Moves to that unit's godown. No incentive for unit transfers.</div></div>
+      <label>📷 Dispatch photo ${url.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
+      <div class="muted small">Photo of the machine loaded in the vehicle / challan.</div>
+      <div id="s-photos"></div>
       <label>Note</label><input name="note" placeholder="optional (e.g. vehicle no., invoice no.)">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send</button></div>`,
     async (fd) => {
-      const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model };
+      const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model, photos: getPhotos() };
+      if (!body.photos.length && !url.startsWith('/admin')) throw new Error('Take a dispatch photo first');
       if (body.to === 'client' && !String(body.party || '').trim()) throw new Error('Client name is compulsory');
       if (body.to === 'unit' && !body.toUnitId) throw new Error('Choose the unit');
       const r = await api(url, { method: 'POST', body });
@@ -1915,6 +1920,7 @@ function bindSend(root, url, units, reload) {
       reload();
     });
     clientSearch(document.getElementById('s-party'), document.getElementById('s-party-list'));
+    const getPhotos = photoPicker(document.getElementById('s-photos'));
     modalBody.querySelectorAll('[name=to]').forEach((r) => (r.onchange = () => {
       const c = modalBody.querySelector('[name=to]:checked').value === 'client';
       document.getElementById('s-client').hidden = !c;
