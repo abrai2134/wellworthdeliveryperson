@@ -1192,7 +1192,6 @@ function asmDispatch(m, body, by) {
   if (m.location === 'dispatched') return { error: 'Already dispatched' };
   if (!str(body.party)) return { error: 'Client name is compulsory' };
   m.location = 'dispatched';
-  m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
   m.dispatchParty = str(body.party, 120);
   m.dispatchedAt = new Date().toISOString();
   m.dispatchedBy = by;
@@ -1212,7 +1211,6 @@ function asmComplete(m, body, by) {
   if (loc.error) return loc;
   savePhotos(m, ph.value, by);
   Object.assign(m, loc.value);
-  if (m.location === 'dispatched') m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1277,7 +1275,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
       return {
         month,
         machines: asLeader.length + asInst.length + asHelp.length,
-        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) + ASM.dispatchIncentiveOf(db(), p.id, month) - ASM.deductionsOf(db(), p.id, month),
+        incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) - ASM.deductionsOf(db(), p.id, month),
       };
     })(),
   });
@@ -1380,7 +1378,6 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
       createdAt: new Date().toISOString(), assignedAt: t.value.started, startedAt: t.value.started, completedAt: completed ? t.value.completed : null,
       createdBy: p.name, entryBy: `${p.name} (old entry)`, timesEditedBy: p.name, note: str(req.body.note, 200), manual: true,
       ...(completed ? { incentive: ASM.incentiveFor(db(), model), ...loc.value } : {}),
-      ...(completed && loc.value.location === 'dispatched' ? { dispatchIncentive: { leader: ASM.incentiveFor(db(), model).dispatch } } : {}),
     };
     made.push(m);
     db().assembly.push(m);
@@ -1484,7 +1481,6 @@ admin.post('/assembly/old', (req, res) => {
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
       incentive: ASM.incentiveFor(db(), model),
       ...(['godown', 'dispatched'].includes(req.body.location) && !readLocation(req.body).error ? readLocation(req.body).value : {}),
-      ...(req.body.location === 'dispatched' && str(req.body.party) ? { dispatchIncentive: { leader: ASM.incentiveFor(db(), model).dispatch } } : {}),
     });
   }
   store.save();
@@ -1552,7 +1548,9 @@ admin.put('/assembly/settings', (req, res) => {
 // ---------- godown dispatch (Dispatch login + admin) ----------
 // Send `qty` machines of a model from a unit's godown (oldest first) to another unit's godown
 // (no incentive) or to a client (client name compulsory; dispatch incentive to the team leader).
-function sendFromGodown(body, by) {
+// `who` = { name, dispatcherId } – a Dispatch login earns the dispatch incentive; the admin does not.
+function sendFromGodown(body, who) {
+  const by = who.name;
   const fromUnitId = str(body.fromUnitId);
   const model = str(body.model, 120);
   const qty = parseInt(body.qty, 10);
@@ -1569,7 +1567,7 @@ function sendFromGodown(body, by) {
     if (!toUnit) return { error: 'Choose the unit to send to' };
     if (toUnit.id === fromUnitId) return { error: 'Choose a different unit' };
     for (const m of list) {
-      (m.transfers = m.transfers || []).push({ from: m.unitId, to: toUnit.id, at, by, note: str(body.note, 200) });
+      (m.transfers = m.transfers || []).push({ from: m.unitId, to: toUnit.id, at, by, dispatcherId: who.dispatcherId || null, note: str(body.note, 200) });
       m.unitId = toUnit.id;
       m.godownAt = at;
     }
@@ -1582,7 +1580,7 @@ function sendFromGodown(body, by) {
       m.dispatchedAt = at;
       m.dispatchedBy = by;
       m.dispatchNote = str(body.note, 200);
-      m.dispatchIncentive = { leader: ASM.incentiveFor(db(), m.model).dispatch };
+      m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, amount: ASM.incentiveFor(db(), m.model).dispatch } : null;
     }
   } else return { error: 'Choose: to another unit or to a client' };
   store.save();
@@ -1593,7 +1591,7 @@ function godownHistory(days = 30) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const rows = [];
   for (const m of db().assembly) {
-    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.leader) || 0 });
+    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0 });
     for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '' });
   }
   // group same moment + model + destination
@@ -1602,11 +1600,17 @@ function godownHistory(days = 30) {
   return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100);
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
-  res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() });
+  const month = monthOf(req.query.month);
+  const board = ASM.dispatchBoard(db(), month);
+  res.json({
+    stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
+    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0 },
+  });
 });
-app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, req.user.account.name)));
+app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
+app.get('/api/dispatch/board', (req, res) => (req.user ? res.json({ board: ASM.dispatchBoard(db(), monthOf(req.query.month)) }) : res.status(401).json({ error: 'Please log in' })));
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
-admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, 'admin')));
+admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
