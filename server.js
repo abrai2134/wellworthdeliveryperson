@@ -1099,6 +1099,7 @@ function asmView(m) {
     photos: (m.photos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at })),
     location: m.location || '',
     modelEdits: (m.modelEdits || []).map((x) => ({ from: x.from, to: x.to, by: x.by, at: x.at })),
+    crewEdits: (m.crewEdits || []).map((x) => ({ by: x.by, at: x.at, from: x.from, to: x.to })),
     dispatchParty: m.dispatchParty || '',
     dispatchedAt: m.dispatchedAt || null,
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
@@ -1274,6 +1275,30 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
 });
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
+// Team leader changes the installation person / helper on their own open machines.
+app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
+  const p = req.user.account;
+  const m = asmFind(req, res, myMachine(req));
+  if (!m) return;
+  if (!['assigned', 'started'].includes(m.status)) return bad(res, 'Only machines not assembled yet');
+  const pick = (id, roles) => db().people.find((x) => x.id === id && x.active && !x.deleted && x.unitId === p.unitId && roles.includes(x.role));
+  const inst = req.body.installerId ? pick(str(req.body.installerId), ['installer', 'both']) : null;
+  const help = req.body.helperId ? pick(str(req.body.helperId), ['helper', 'both']) : null;
+  if (req.body.installerId && !inst) return bad(res, 'Choose an installation person of your unit');
+  if (req.body.helperId && !help) return bad(res, 'Choose a helper of your unit');
+  if (inst && help && inst.id === help.id) return bad(res, 'Installation person and helper must be different');
+  const list = req.body.all ? db().assembly.filter((x) => x.leaderId === p.id && ['assigned', 'started'].includes(x.status)) : [m];
+  const at = new Date().toISOString();
+  for (const x of list) {
+    const before = { installer: personName(x.installerId), helper: personName(x.helperId) };
+    if (inst) x.installerId = inst.id;
+    if (help) x.helperId = help.id;
+    (x.crewEdits = x.crewEdits || []).push({ by: p.name, at, from: before, to: { installer: personName(x.installerId), helper: personName(x.helperId) } });
+  }
+  store.save();
+  res.json({ ok: true, count: list.length });
+});
+
 app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id)); });
 app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmDispatch(m, req.body, req.user.account.name)); });
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
