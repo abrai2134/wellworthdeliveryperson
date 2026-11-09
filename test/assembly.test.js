@@ -120,3 +120,24 @@ test('divert deduction lowers the leader\'s net incentive in the scoreboard', ()
   assert.equal(l1.deduction, 100);
   assert.equal(l1.diverted, 1);
 });
+
+test('an installation person is not given more than the max pending machines', () => {
+  const db = setup(); // installers i1, i2
+  db.settings.assembly = { maxPending: 50, maxInstallerPending: 3 };
+  add(db, 8);
+  const c = {};
+  for (const m of db.assembly) c[m.installerId] = (c[m.installerId] || 0) + 1;
+  assert.ok((c.i1 || 0) <= 3 && (c.i2 || 0) <= 3, JSON.stringify(c));
+  assert.equal(db.assembly.filter((m) => !m.installerId).length, 2); // no one free under the limit
+});
+
+test('a machine left without an installation person gets one when someone finishes', () => {
+  const db = setup();
+  db.settings.assembly = { maxPending: 50, maxInstallerPending: 3 };
+  add(db, 7);
+  assert.equal(db.assembly.filter((m) => !m.installerId).length, 1);
+  const done = db.assembly.find((m) => m.installerId === 'i1');
+  done.status = 'done';
+  A.assignWaiting(db, 'Asia/Kolkata');
+  assert.equal(db.assembly.filter((m) => !m.installerId && m.status !== 'done').length, 0);
+});

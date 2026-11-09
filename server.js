@@ -1208,6 +1208,14 @@ function asmDispatch(m, body, by) {
   return { value: m };
 }
 
+// An installation person may have at most N machines not assembled yet (Assembly settings).
+function installerLimit(person, adding) {
+  const max = Math.max(1, Number(asmSettings().maxInstallerPending) || 10);
+  const now = ASM.installerOpen(db(), person.id);
+  if (adding <= 0 || now + adding <= max) return '';
+  return `${person.name} already has ${now} machine${now === 1 ? '' : 's'} pending (max ${max}). Ask them to finish some machines first, then you can give ${adding > 1 ? 'these' : 'this one'} to them.`;
+}
+
 function asmComplete(m, body, by) {
   if (!['assigned', 'started'].includes(m.status)) return { error: 'This machine is not open' };
   const t = asmTimes(m, body, true);
@@ -1304,6 +1312,7 @@ app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
   if (req.body.helperId && !help) return bad(res, 'Choose a helper of your unit');
   if (inst && help && inst.id === help.id) return bad(res, 'Installation person and helper must be different');
   const list = req.body.all ? db().assembly.filter((x) => x.leaderId === p.id && ['assigned', 'started'].includes(x.status)) : [m];
+  if (inst) { const e = installerLimit(inst, list.filter((x) => x.installerId !== inst.id).length); if (e) return bad(res, e); }
   const at = new Date().toISOString();
   for (const x of list) {
     const before = { installer: personName(x.installerId), helper: personName(x.helperId) };
@@ -1458,6 +1467,10 @@ admin.post('/assembly/:id/assign', (req, res) => {
   if (!ok(installerId, ['installer', 'both'])) return bad(res, 'Choose an installation person');
   if (!ok(helperId, ['helper', 'both'])) return bad(res, 'Choose a helper');
   if (installerId && installerId === helperId) return bad(res, 'Installation person and helper must be different');
+  if (installerId && installerId !== m.installerId && m.status !== 'done') {
+    const e = installerLimit(db().people.find((x) => x.id === installerId), 1);
+    if (e) return bad(res, e);
+  }
   if (leaderId !== undefined) {
     m.leaderId = leaderId || null;
     if (m.status === 'waiting' && m.leaderId) { m.status = 'assigned'; m.assignedAt = new Date().toISOString(); }
@@ -1544,6 +1557,7 @@ admin.put('/assembly/settings', (req, res) => {
     defaultLeader: b.defaultLeader !== undefined ? money(b.defaultLeader) : cur.defaultLeader,
     defaultInstaller: b.defaultInstaller !== undefined ? money(b.defaultInstaller) : cur.defaultInstaller,
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
+    maxInstallerPending: Math.max(1, Math.min(50, parseInt(b.maxInstallerPending, 10) || cur.maxInstallerPending || 10)),
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
     dispatchIncentives: Array.isArray(b.dispatchIncentives)
       ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount) })).filter((x) => x.model).slice(0, 300)

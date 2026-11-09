@@ -1774,6 +1774,7 @@ async function adminAssembly(main) {
         <div><label>Default incentive – team leader ₹</label><input name="defaultLeader" type="number" min="0" value="${esc(s.defaultLeader)}"></div>
         <div><label>Default incentive – installation ₹</label><input name="defaultInstaller" type="number" min="0" value="${esc(s.defaultInstaller)}"></div>
         <div><label>Default dispatch incentive ₹ (dispatch person)</label><input name="defaultDispatch" type="number" min="0" value="${esc(s.defaultDispatch || 0)}"></div>
+        <div><label>Max pending per installation person</label><input name="maxInstallerPending" type="number" min="1" max="50" value="${esc(s.maxInstallerPending || 10)}"></div>
         <div><label>Deduction per diverted machine ₹</label><input name="divertPenalty" type="number" min="0" value="${esc(s.divertPenalty ?? 100)}"></div>
       </div>
       <h3 style="margin-top:12px">🛠️ Assembly incentive per model</h3><div class="muted small">Paid when the machine is assembled: Leader ₹ to the team leader, Install ₹ to the installation person. Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
