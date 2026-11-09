@@ -1445,14 +1445,56 @@ function asmRow(m, who, me) {
 }
 
 // Machines grouped by team leader (waiting ones last), as compact lists.
+// Same model + status + team = one line "× N"; tap to see each machine (and its buttons).
+function asmCluster(ms, who, me) {
+  if (ms.length === 1) return asmRow(ms[0], who, me);
+  const m = ms[0];
+  const [cls, label] = ASM_STATUS[m.status] || ['', m.status];
+  const uniq = (f) => [...new Set(ms.map(f).filter(Boolean))].join(', ');
+  const crew = [uniq((x) => x.installer && x.installer.name) && '🔧 ' + uniq((x) => x.installer && x.installer.name), uniq((x) => x.helper && x.helper.name) && '🧰 ' + uniq((x) => x.helper && x.helper.name)].filter(Boolean).join(' · ') || 'no team yet';
+  return `<details class="done-row asm-row asm-cluster"><summary>
+      <span class="badge ${cls} asm-dot">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔧' : m.status === 'waiting' ? '⏳' : '•'}</span>
+      <span class="dr-main"><b>${esc(m.model)} <span class="qty-tag">× ${ms.length}</span></b><span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
+      <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>tap to see each</span>
+    </summary><div class="dr-body">${ms.map((x) => asmRow(x, who, me)).join('')}</div></details>`;
+}
+
+// Team summary as text, for copying / WhatsApp.
+function teamText(name, g) {
+  const by = {};
+  for (const m of g) {
+    const k = [m.status, m.model].join('|');
+    const x = (by[k] ||= { m, n: 0, inst: new Set(), help: new Set() });
+    x.n++;
+    if (m.installer) x.inst.add(m.installer.name);
+    if (m.helper) x.help.add(m.helper.name);
+  }
+  const part = (status, title) => {
+    const rows = Object.values(by).filter((x) => x.m.status === status);
+    if (!rows.length) return [];
+    const total = rows.reduce((n, x) => n + x.n, 0);
+    return [`${title} (${total})`, ...rows.map((x) => `• ${x.m.model} × ${x.n}${x.inst.size || x.help.size ? ` – ${[[...x.inst].join(', '), [...x.help].join(', ')].filter(Boolean).join(' / ')}` : ''}`), ''];
+  };
+  return [`*👷 ${name} – Assembly ${fmtDate(state.today || new Date().toISOString().slice(0, 10))}*`, `Total: ${g.length} machine${g.length > 1 ? 's' : ''}`, '',
+    ...part('started', '🔧 Assembling'), ...part('assigned', '• Given, not started'), ...part('waiting', '⏳ Waiting'), ...part('done', '✓ Assembled')].join('\n').trim();
+}
+
+// Machines grouped by team leader (waiting ones last), as compact lists.
 function asmGrouped(list, who, me) {
   const groups = {};
   for (const m of list) (groups[m.leader ? m.leader.name : '⏳ Unallocated – waiting for a free team leader'] ||= []).push(m);
   const names = Object.keys(groups).sort((a, b) => (a.startsWith('⏳') ? 1 : 0) - (b.startsWith('⏳') ? 1 : 0) || a.localeCompare(b));
-  return names.map((n) => {
+  state.teamTexts = state.teamTexts || {};
+  return names.map((n, gi) => {
     const g = groups[n];
     const started = g.filter((m) => m.status === 'started').length;
-    return `<div class="done-list asm-group"><div class="dl-head"><b>👷 ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${started ? ` · ${started} assembling` : ''}</span></div>${g.map((m) => asmRow(m, who, me)).join('')}</div>`;
+    const clusters = {};
+    for (const m of g) (clusters[[m.status, m.model].join('|')] ||= []).push(m);
+    const tid = 't' + Math.random().toString(36).slice(2, 8) + gi;
+    state.teamTexts[tid] = teamText(n.replace(/^⏳ /, ''), g);
+    return `<div class="done-list asm-group"><div class="dl-head row"><span><b>👷 ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${started ? ` · ${started} assembling` : ''}</span></span><span class="spacer"></span>
+        <button type="button" class="link small" data-team-copy="${tid}">📋 Copy</button><button type="button" class="link small" data-team-wa="${tid}">📤 WhatsApp</button></div>
+      ${Object.values(clusters).map((c) => asmCluster(c, who, me)).join('')}</div>`;
   }).join('');
 }
 
@@ -1519,6 +1561,12 @@ function asmTimesValue() {
 
 function bindAsm(root, base, items, reload) {
   const find = (id) => items.find((m) => m.id === id);
+  root.querySelectorAll('[data-team-copy]').forEach((b) => (b.onclick = async () => {
+    const text = state.teamTexts[b.dataset.teamCopy] || '';
+    try { await navigator.clipboard.writeText(text); toast('Team details copied – paste in WhatsApp'); }
+    catch { prompt('Copy this text:', text); }
+  }));
+  root.querySelectorAll('[data-team-wa]').forEach((b) => (b.onclick = () => window.open('https://wa.me/?text=' + encodeURIComponent(state.teamTexts[b.dataset.teamWa] || ''), '_blank')));
   const post = async (url, msg, body) => { try { await api(url, { method: 'POST', body }); toast(msg); reload(); } catch (ex) { toast(ex.message, true); } };
   root.querySelectorAll('[data-asm-start]').forEach((b) => (b.onclick = () => post(`${base}/${b.dataset.asmStart}/start`, 'Started – time noted')));
   root.querySelectorAll('[data-asm-done]').forEach((b) => (b.onclick = () => {
