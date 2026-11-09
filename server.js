@@ -624,14 +624,14 @@ app.get('/api/photos/:file', (req, res) => {
 });
 
 // ---------- client & machine lookup (units and admin) ----------
-function needUnitOrAdmin(req, res, next) {
-  if (!req.user || !['unit', 'admin', 'dispatch'].includes(req.user.role)) return res.status(401).json({ error: 'Please log in' });
+function needLogin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Please log in' }); // any login (team leaders pick clients too)
   next();
 }
-app.get('/api/lookup/clients', needUnitOrAdmin, (req, res) => {
+app.get('/api/lookup/clients', needLogin, (req, res) => {
   res.json({ clients: sheets.searchClients(db().clients, str(req.query.q, 80), 10) });
 });
-app.get('/api/lookup/makers', needUnitOrAdmin, (req, res) => {
+app.get('/api/lookup/makers', needLogin, (req, res) => {
   res.json({ makers: db().makers });
 });
 // The model list is also used by team leaders (request / old machine forms).
@@ -1180,6 +1180,25 @@ function readLocation(body) {
   return { value: location === 'dispatched' ? { location, dispatchParty: str(body.party, 120), dispatchedAt: at } : { location, godownAt: at } };
 }
 // Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
+// "Dispatched to client" chosen while completing / adding a machine: dispatch photo is
+// compulsory (admin may skip). Returns the photos to save, or an error.
+function readDispatchPhoto(body, by) {
+  if (str(body.location) !== 'dispatched') return { value: [] };
+  const ph = readPhotos({ photos: [] }, body.dispatchPhotos);
+  if (ph.error) return ph;
+  if (!ph.value.length && by !== 'admin') return { error: 'Take a dispatch photo (machine sent to the client)' };
+  return ph;
+}
+function attachDispatchPhoto(machines, photos, by) {
+  if (!photos.length || !machines.length) return;
+  const holder = { id: machines[0].id, photos: [] };
+  savePhotos(holder, photos, by);
+  for (const m of machines) {
+    m.dispatchPhotos = [...(m.dispatchPhotos || []), ...holder.photos.map((p) => ({ ...p, kind: 'client', at: m.dispatchedAt || p.at }))];
+    m.dispatchedBy = m.dispatchedBy || by;
+  }
+}
+
 function asmEditModel(m, body, by, scope) {
   const model = str(body.model, 120);
   if (!model) return { error: 'Enter the model no.' };
@@ -1227,8 +1246,11 @@ function asmComplete(m, body, by) {
   if (!ph.value.length && !(m.photos || []).length && by !== 'admin') return { error: 'Take a photo (JPG) of the machine sticker first' };
   const loc = readLocation(body);
   if (loc.error) return loc;
+  const dph = readDispatchPhoto(body, by);
+  if (dph.error) return dph;
   savePhotos(m, ph.value, by);
   Object.assign(m, loc.value);
+  if (m.location === 'dispatched') { m.dispatchedBy = by; attachDispatchPhoto([m], dph.value, by); }
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1387,6 +1409,8 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
   if (t.error) return bad(res, t.error);
   const loc = completed ? readLocation(req.body) : { value: {} };
   if (loc.error) return bad(res, loc.error);
+  const dph = completed ? readDispatchPhoto(req.body, p.name) : { value: [] };
+  if (dph.error) return bad(res, dph.error);
   const ph = completed ? readPhotos({ photos: [] }, req.body.photos) : { value: [] };
   if (ph.error) return bad(res, ph.error);
   if (completed && !ph.value.length) return bad(res, 'Take a photo (JPG) of the machine sticker');
@@ -1402,6 +1426,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
     db().assembly.push(m);
   }
   if (completed) { savePhotos(made[0], ph.value, p.name); for (const m of made.slice(1)) m.photos = made[0].photos.slice(); }
+  if (completed && loc.value.location === 'dispatched') attachDispatchPhoto(made, dph.value, p.name);
   store.save();
   res.json({ ok: true });
 });
