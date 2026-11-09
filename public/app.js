@@ -1670,12 +1670,32 @@ async function staffAssemblyHtml(wrap) {
   const box = document.createElement('div');
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
       ${r.myMonth && r.myMonth.machines ? `<span class="badge ok">🏆 This month: ${r.myMonth.machines} machine${r.myMonth.machines > 1 ? 's' : ''} · ₹${r.myMonth.incentive}</span>` : ''}
-      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button>` : ''}</div>
+      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button> <button class="small" id="asm-rates">💰 Incentive rates</button>` : ''}</div>
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
     ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">${q.type === 'old' ? '📁 Old machine: ' : '⚙️ '}${esc(q.model)} × ${q.qty}${q.type === 'old' ? ` (${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))})` : ''} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
     <div id="asm-board"></div>`;
   wrap.appendChild(box);
   bindAsm(box, '/staff/assembly', r.items, renderStaff);
+  const ratesBtn = document.getElementById('asm-rates');
+  if (ratesBtn) ratesBtn.onclick = async () => {
+    const [rt, models] = await Promise.all([api('/staff/assembly/incentives'), loadMachineList()]);
+    const opts = models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('');
+    openModal(`<h2>💰 Incentive rates</h2>
+      <p class="small muted">You can add a <b>new model</b>. Existing rates can be changed only by the admin.</p>
+      <details><summary class="small"><b>🛠️ Assembly rates (${rt.incentives.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Leader ₹</th><th class="num">Install ₹</th></tr></thead><tbody>
+        ${rt.incentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.leader}</td><td class="num">${x.installer}</td></tr>`).join('')}<tr><td class="muted">Other models (default)</td><td class="num">${rt.defaultLeader}</td><td class="num">${rt.defaultInstaller}</td></tr></tbody></table></div></details>
+      <details><summary class="small"><b>🚚 Dispatch rates (${rt.dispatchIncentives.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Dispatch ₹</th></tr></thead><tbody>
+        ${rt.dispatchIncentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.amount}</td></tr>`).join('')}<tr><td class="muted">Other models (default)</td><td class="num">${rt.defaultDispatch}</td></tr></tbody></table></div></details>
+      <h3 style="margin-top:12px">Add a new model</h3>
+      <label>Rate for *</label><select name="type" id="r-type"><option value="assembly">🛠️ Assembly (leader + installation)</option><option value="dispatch">🚚 Dispatch</option></select>
+      <label>⚙️ Model no. *</label><input name="model" list="r-models" required><datalist id="r-models">${opts}</datalist>
+      <div class="form-grid" id="r-asm"><div><label>Leader ₹</label><input name="leader" type="number" min="0"></div><div><label>Install ₹</label><input name="installer" type="number" min="0"></div></div>
+      <div id="r-dsp" hidden><label>Dispatch ₹</label><input name="amount" type="number" min="0"></div>
+      <div class="actions"><button value="cancel">Close</button><button class="primary" value="ok">Add rate</button></div>`,
+    async (fd) => { await api('/staff/assembly/incentives', { method: 'POST', body: Object.fromEntries(fd) }); toast('Rate added – the admin can see who added it'); });
+    const t = document.getElementById('r-type');
+    t.onchange = () => { document.getElementById('r-asm').hidden = t.value !== 'assembly'; document.getElementById('r-dsp').hidden = t.value !== 'dispatch'; };
+  };
   const oldBtn = document.getElementById('asm-old-l');
   if (oldBtn) oldBtn.onclick = async () => {
     const models = await loadMachineList();
@@ -1826,7 +1846,7 @@ async function adminAssembly(main) {
   // incentive rows
   const rows = document.getElementById('inc-rows');
   const addRow = (x, after) => {
-    const html = `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link small ir-copy" title="Copy these rates to a new row">⧉ Copy</button><button type="button" class="link danger ir-del">✕</button></div>`;
+    const html = `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px">${x.addedBy ? `<span class="badge manual" title="${esc(fmtTime(x.addedAt))}">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small ir-copy" title="Copy these rates to a new row">⧉ Copy</button><button type="button" class="link danger ir-del">✕</button></div>`;
     if (after) after.insertAdjacentHTML('afterend', html); else rows.insertAdjacentHTML('beforeend', html);
     const el = after ? after.nextElementSibling : rows.lastElementChild;
     el.querySelector('.ir-del').onclick = () => el.remove();
@@ -1842,7 +1862,7 @@ async function adminAssembly(main) {
   // dispatch incentive rows (own list)
   const drows = document.getElementById('dinc-rows');
   const addDRow = (x, after) => {
-    const html = `<div class="row dinc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="dr-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Dispatch ₹</span><input class="dr-a" type="number" min="0" value="${esc(x.amount)}" style="width:90px"><button type="button" class="link small dr-copy" title="Copy this rate to a new row">⧉ Copy</button><button type="button" class="link danger dr-del">✕</button></div>`;
+    const html = `<div class="row dinc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="dr-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Dispatch ₹</span><input class="dr-a" type="number" min="0" value="${esc(x.amount)}" style="width:90px">${x.addedBy ? `<span class="badge manual" title="${esc(fmtTime(x.addedAt))}">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small dr-copy" title="Copy this rate to a new row">⧉ Copy</button><button type="button" class="link danger dr-del">✕</button></div>`;
     if (after) after.insertAdjacentHTML('afterend', html); else drows.insertAdjacentHTML('beforeend', html);
     const el = after ? after.nextElementSibling : drows.lastElementChild;
     el.querySelector('.dr-del').onclick = () => el.remove();

@@ -1548,6 +1548,39 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
   store.save();
   res.json({ ok: true });
 });
+// keep "added by <team leader>" on a rate when the admin saves the list again
+const modelKey = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+function addedBy(list, x) {
+  const old = (list || []).find((o) => modelKey(o.model) === modelKey(x && x.model));
+  return old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {};
+}
+
+// Team leaders can see the rates and ADD a model that is not in a list yet (not change rates).
+app.get('/api/staff/assembly/incentives', need('staff'), (req, res) => {
+  if (req.user.account.role !== 'leader') return bad(res, 'Only team leaders');
+  const s = asmSettings();
+  res.json({ incentives: s.incentives || [], dispatchIncentives: s.dispatchIncentives || [], defaultLeader: s.defaultLeader, defaultInstaller: s.defaultInstaller, defaultDispatch: s.defaultDispatch });
+});
+app.post('/api/staff/assembly/incentives', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can add incentive rates');
+  const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
+  const model = str(req.body.model, 120);
+  if (!model) return bad(res, 'Enter the model no.');
+  const s = { ...asmSettings() };
+  const stamp = { addedBy: p.name, addedAt: new Date().toISOString() };
+  if (req.body.type === 'dispatch') {
+    if ((s.dispatchIncentives || []).some((x) => modelKey(x.model) === modelKey(model))) return bad(res, 'This model already has a dispatch rate – only the admin can change it');
+    s.dispatchIncentives = [...(s.dispatchIncentives || []), { model, amount: money(req.body.amount), ...stamp }];
+  } else {
+    if ((s.incentives || []).some((x) => modelKey(x.model) === modelKey(model))) return bad(res, 'This model already has an assembly rate – only the admin can change it');
+    s.incentives = [...(s.incentives || []), { model, leader: money(req.body.leader), installer: money(req.body.installer), ...stamp }];
+  }
+  db().settings.assembly = s;
+  store.save();
+  res.json({ ok: true });
+});
+
 admin.put('/assembly/settings', (req, res) => {
   const b = req.body;
   const cur = asmSettings();
@@ -1560,10 +1593,10 @@ admin.put('/assembly/settings', (req, res) => {
     maxInstallerPending: Math.max(1, Math.min(50, parseInt(b.maxInstallerPending, 10) || cur.maxInstallerPending || 10)),
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
     dispatchIncentives: Array.isArray(b.dispatchIncentives)
-      ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount) })).filter((x) => x.model).slice(0, 300)
+      ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount), ...addedBy(cur.dispatchIncentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.dispatchIncentives || [],
     incentives: Array.isArray(b.incentives)
-      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer) })).filter((x) => x.model).slice(0, 300)
+      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer), ...addedBy(cur.incentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
   asmAssign();
