@@ -81,7 +81,7 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '30mb' })); // room for a few photos
 // Always check for a newer page after an update (no stale app.js / style.css in phones).
-app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
+app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 // Simple brute-force protection for login.
 const attempts = new Map();
@@ -1771,7 +1771,10 @@ admin.delete('/dispatchers/:id', (req, res) => {
 app.use('/api/admin', admin);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
-app.get(/.*/, (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
+// The page asks for app.js / style.css with ?v=<version>, so phones always load the newest code after a deploy.
+const INDEX_HTML = require('fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8')
+  .replace('/app.js"', `/app.js?v=${VERSION}"`).replace('/style.css"', `/style.css?v=${VERSION}"`);
+app.get(/.*/, (req, res) => { res.setHeader('Cache-Control', 'no-cache, no-store'); res.type('html').send(INDEX_HTML); });
 
 app.use((err, req, res, next) => {
   console.error(err);
