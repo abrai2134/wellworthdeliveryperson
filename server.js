@@ -1073,6 +1073,14 @@ admin.post('/restore', (req, res) => {
 // ---------- assembly ----------
 const ASM = require('./lib/assembly');
 ASM.assignWaiting(db(), db().settings.timezone); // on start: give out anything still waiting
+{
+  // Dispatch incentive moved to its own list: copy amounts typed in the old "Dispatch ₹" column once.
+  const a = db().settings.assembly;
+  if (a && !a.dispatchIncentives) {
+    a.dispatchIncentives = (a.incentives || []).filter((x) => Number(x.dispatch) > 0).map((x) => ({ model: x.model, amount: Number(x.dispatch) }));
+    store.save();
+  }
+}
 const personName = (id) => (db().people.find((p) => p.id === id) || {}).name || '';
 const personBrief = (id) => {
   const p = db().people.find((x) => x.id === id);
@@ -1537,8 +1545,11 @@ admin.put('/assembly/settings', (req, res) => {
     defaultInstaller: b.defaultInstaller !== undefined ? money(b.defaultInstaller) : cur.defaultInstaller,
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
+    dispatchIncentives: Array.isArray(b.dispatchIncentives)
+      ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount) })).filter((x) => x.model).slice(0, 300)
+      : cur.dispatchIncentives || [],
     incentives: Array.isArray(b.incentives)
-      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer), dispatch: money(x && x.dispatch) })).filter((x) => x.model).slice(0, 300)
+      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
   asmAssign();

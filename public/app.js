@@ -1777,8 +1777,10 @@ async function adminAssembly(main) {
         <div><label>Default dispatch incentive ₹ (dispatch person)</label><input name="defaultDispatch" type="number" min="0" value="${esc(s.defaultDispatch || 0)}"></div>
         <div><label>Deduction per diverted machine ₹</label><input name="divertPenalty" type="number" min="0" value="${esc(s.divertPenalty ?? 100)}"></div>
       </div>
-      <h3 style="margin-top:12px">Incentive per model</h3><div class="muted small">Leader ₹ / Install ₹ = when assembled · Dispatch ₹ = to the dispatch person (Dispatch login) who sends the machine to a client (unit transfers get none). Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
+      <h3 style="margin-top:12px">🛠️ Assembly incentive per model</h3><div class="muted small">Paid when the machine is assembled: Leader ₹ to the team leader, Install ₹ to the installation person. Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
       <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
+      <h3 style="margin-top:18px">🚚 Dispatch incentive per model</h3><div class="muted small">Paid to the dispatch person (Dispatch login) for each machine sent to a <b>client</b>. Sending to another unit gets nothing. Models not listed use the default dispatch amount above.</div>
+      <div id="dinc-rows"></div><button type="button" class="link" id="dinc-add">+ Add model</button>
       <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
   document.getElementById('asm-add').onclick = () => asmAddForm('/admin', renderAdmin);
@@ -1824,17 +1826,27 @@ async function adminAssembly(main) {
   // incentive rows
   const rows = document.getElementById('inc-rows');
   const addRow = (x) => {
-    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><span>Dispatch ₹</span><input class="ir-d" type="number" min="0" value="${esc(x.dispatch ?? '')}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
+    rows.insertAdjacentHTML('beforeend', `<div class="row inc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="ir-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Leader ₹</span><input class="ir-l" type="number" min="0" value="${esc(x.leader)}" style="width:80px"><span>Install ₹</span><input class="ir-i" type="number" min="0" value="${esc(x.installer)}" style="width:80px"><button type="button" class="link danger">✕</button></div>`);
     const el = rows.lastElementChild;
     el.querySelector('button').onclick = () => el.remove();
   };
   (s.incentives || []).forEach(addRow);
-  document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '', dispatch: '' });
+  document.getElementById('inc-add').onclick = () => addRow({ model: '', leader: '', installer: '' });
+  // dispatch incentive rows (own list)
+  const drows = document.getElementById('dinc-rows');
+  const addDRow = (x) => {
+    drows.insertAdjacentHTML('beforeend', `<div class="row dinc-row" style="margin-top:6px;flex-wrap:nowrap"><input class="dr-m" list="asm-models2" placeholder="Model no." value="${esc(x.model)}" style="flex:1"><span>Dispatch ₹</span><input class="dr-a" type="number" min="0" value="${esc(x.amount)}" style="width:90px"><button type="button" class="link danger">✕</button></div>`);
+    const el = drows.lastElementChild;
+    el.querySelector('button').onclick = () => el.remove();
+  };
+  (s.dispatchIncentives || []).forEach(addDRow);
+  document.getElementById('dinc-add').onclick = () => addDRow({ model: '', amount: '' });
   const form = document.getElementById('asm-set');
   form.onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(form));
-    body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value, dispatch: el.querySelector('.ir-d').value })).filter((x) => x.model.trim());
+    body.dispatchIncentives = [...drows.querySelectorAll('.dinc-row')].map((el) => ({ model: el.querySelector('.dr-m').value, amount: el.querySelector('.dr-a').value })).filter((x) => x.model.trim());
+    body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value })).filter((x) => x.model.trim());
     try { await api('/admin/assembly/settings', { method: 'PUT', body }); toast('Assembly settings saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
   };
   document.getElementById('asm-old').onclick = async () => {
