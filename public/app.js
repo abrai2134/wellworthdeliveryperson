@@ -1385,6 +1385,7 @@ function asmCard(m, who, me) {
   if (canWork && open) btns.push(`<button class="small primary" data-asm-done="${esc(m.id)}">✓ Assembled</button>`);
   if (who === 'staff' && open && m.leader && m.leader.id === me) btns.push(`<button class="small" data-asm-divert="${esc(m.id)}">↪ Divert</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
+  if (canWork && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
   return `<div class="card unit-card${m.status === 'done' ? ' done' : ''}">
@@ -1393,6 +1394,7 @@ function asmCard(m, who, me) {
     <div class="small" style="margin-top:6px">👷 Team leader: ${p(m.leader, 'none yet')}</div>
     <div class="small">🔧 Installation: ${p(m.installer, '')} · 🧰 Helper: ${p(m.helper, '')}</div>
     <div class="small muted" style="margin-top:4px">🕒 ${m.assignedAt ? `Given ${esc(fmtTime(m.assignedAt))}` : 'Not given yet'}${m.startedAt ? ` · Started ${esc(fmtTime(m.startedAt))}` : ''}${m.completedAt ? ` · <b>Assembled ${esc(fmtTime(m.completedAt))}</b>${work ? ` (${esc(work)})` : ''}` : open ? ` · pending ${esc(ageText(m.assignedAt))}` : ''}${m.timesEditedBy ? ` <span class="badge manual">✎ times by ${esc(m.timesEditedBy)}</span>` : ''}</div>
+    ${m.status === 'done' && m.location ? `<div class="small" style="margin-top:4px">${m.location === 'dispatched' ? `<span class="badge ok">🚚 Dispatched</span>${m.dispatchParty ? ' to <b>' + esc(m.dispatchParty) + '</b>' : ''}${m.dispatchedAt ? ' · ' + esc(fmtTime(m.dispatchedAt)) : ''}` : '<span class="badge w4">🏬 In godown</span>'}</div>` : ''}
     ${m.incentive && (m.incentive.leader || m.incentive.installer) ? `<div class="small expense">🏆 Incentive: team leader ₹${m.incentive.leader} · installation ₹${m.incentive.installer}</div>` : ''}
     ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
     ${m.diverts && m.diverts.length ? `<div class="small absent-log">${m.diverts.map((x) => `↪ Diverted by <b>${esc(x.from)}</b> to <b>${esc(x.to)}</b> ${esc(fmtTime(x.at))}${x.amount ? ` · ₹${x.amount} deducted from ${esc(x.from)}` : ''}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>')}</div>` : ''}
@@ -1438,14 +1440,31 @@ async function asmBoardHtml(month, maxPending) {
     ${inst ? `<h3 style="margin-top:12px">Installation persons</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Assembled</th><th class="num">Incentive</th></tr></thead><tbody>${inst}</tbody></table></div>` : ''}</div>`;
 }
 
+// Where the machine is after assembly.
+function asmLocationFields() {
+  return `<label>📍 Where is the machine now? *</label>
+    <div class="row"><label class="check"><input type="radio" name="location" value="godown"> 🏬 In godown</label>
+      <label class="check"><input type="radio" name="location" value="dispatched"> 🚚 Dispatched to client</label></div>
+    <div id="a-party-wrap" hidden><label>Client / party name</label><input name="party" list="asm-parties" placeholder="party name (optional)"></div>`;
+}
+function bindLocation() {
+  const wrap = document.getElementById('a-party-wrap');
+  modalBody.querySelectorAll('[name=location]').forEach((r) => (r.onchange = () => { wrap.hidden = modalBody.querySelector('[name=location]:checked').value !== 'dispatched'; }));
+}
+function locationValue() {
+  const r = modalBody.querySelector('[name=location]:checked');
+  if (!r) throw new Error('Choose where the machine is now: In godown or Dispatched to client');
+  return { location: r.value, party: (modalBody.querySelector('[name=party]') || {}).value || '' };
+}
+
 // Start date + time and end date + time (assembly can take more than a day).
-function asmTimesForm(m, endIso) {
+function asmTimesForm(m, endIso, old) {
   const st = localInput(m.startedAt);
   const en = localInput(endIso);
   const sDate = st ? st.slice(0, 10) : en.slice(0, 10); // start not pressed: same day as the end, type the time
   return `<div class="form-grid">
       <div><label>Start date *</label><input type="date" id="a-sd" value="${esc(sDate)}"></div>
-      <div><label>Start time * ${m.startedAt ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="time" id="a-st" value="${esc(st.slice(11))}"></div>
+      <div><label>Start time * ${m.startedAt || old ? '' : '<span class="badge warn">Start not pressed</span>'}</label><input type="time" id="a-st" value="${esc(st.slice(11))}"></div>
       <div><label>End date *</label><input type="date" id="a-ed" value="${esc(en.slice(0, 10))}"></div>
       <div><label>End time *</label><input type="time" id="a-et" value="${esc(en.slice(11))}"></div>
     </div>`;
@@ -1469,19 +1488,28 @@ function bindAsm(root, base, items, reload) {
     openModal(`<h2>Machine assembled</h2><div class="muted">⚙️ ${esc(m.model)} · ${esc(m.unitName)}</div>
       <p class="small"><b>Start and end date / time are compulsory.</b> Change them if Start was not pressed on time.</p>
       ${asmTimesForm(m, new Date().toISOString())}
-      <label>🏷️ Photo of the machine sticker ${base.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
-      <div class="muted small">Take a clear photo of the sticker / name plate on the assembled machine.</div>
+      <label>🏷️ Photo of the machine sticker (JPG) ${base.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
+      <div class="muted small">Take a clear photo of the sticker / name plate on the assembled machine. It is saved as JPG.</div>
       <div id="a-photos"></div>
+      ${asmLocationFields()}
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ Assembled</button></div>`,
     async () => {
       const times = asmTimesValue();
       const photos = getPhotos();
-      if (!photos.length && !base.startsWith('/admin')) throw new Error('Take a photo of the machine sticker first');
-      await api(`${base}/${m.id}/complete`, { method: 'POST', body: { ...times, photos } });
+      if (!photos.length && !base.startsWith('/admin')) throw new Error('Take a photo (JPG) of the machine sticker first');
+      await api(`${base}/${m.id}/complete`, { method: 'POST', body: { ...times, photos, ...locationValue() } });
       toast('Assembled – well done!');
       reload();
     });
     const getPhotos = photoPicker(document.getElementById('a-photos'));
+    bindLocation();
+  }));
+  root.querySelectorAll('[data-asm-dispatch]').forEach((b) => (b.onclick = () => {
+    const m = find(b.dataset.asmDispatch);
+    openModal(`<h2>🚚 Mark dispatched</h2><div class="muted">⚙️ ${esc(m.model)} · now in godown</div>
+      <label>Client / party name</label><input name="party" placeholder="optional">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Dispatched</button></div>`,
+    async (fd) => { await api(`${base}/${m.id}/dispatch`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Marked dispatched'); reload(); });
   }));
   root.querySelectorAll('[data-asm-divert]').forEach((b) => (b.onclick = async () => {
     const m = find(b.dataset.asmDivert);
@@ -1580,14 +1608,43 @@ async function staffAssemblyHtml(wrap) {
   if (oldBtn) oldBtn.onclick = async () => {
     const models = await loadMachineList();
     const sel = (name, roles, label) => `<label>${label}</label><select name="${name}"><option value="">— none —</option>${r.crew.filter((x) => roles.includes(x.role)).map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>`;
-    openModal(`<h2>📁 Add old machine</h2><p class="small">A machine you assembled earlier that was missed. It is added to your record (and incentive) <b>after the admin approves</b>.</p>
+    openModal(`<h2>📁 Add old machine</h2><p class="small">A machine that was missed earlier. It is added to your record straight away.</p>
+      <label>Status *</label><select name="completed" id="o-status"><option value="yes">✓ Completed (assembled)</option><option value="no">🔧 Still assembling</option></select>
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models" required></div><div><label>Quantity</label><input name="qty" type="number" min="1" max="10" value="1"></div></div>
       <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       ${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
-      ${asmTimesForm({}, '')}
+      ${asmTimesForm({}, '', true)}
+      <div id="o-done">
+        <label>🏷️ Photo of the machine sticker (JPG) *</label><div id="o-photos"></div>
+        ${asmLocationFields()}
+      </div>
       <label>Note</label><input name="note" placeholder="e.g. assembled in October, not entered">
-      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send to admin</button></div>`,
-    async (fd) => { await api('/staff/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue() } }); toast('Sent to admin for approval'); renderStaff(); });
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
+    async (fd) => {
+      const done = fd.get('completed') !== 'no';
+      const g = (id) => document.getElementById(id).value;
+      if (!g('a-sd') || !g('a-st')) throw new Error('Start date and time are compulsory');
+      const body = { ...Object.fromEntries(fd), startedAt: new Date(`${g('a-sd')}T${g('a-st')}`).toISOString() };
+      if (done) {
+        Object.assign(body, asmTimesValue());
+        body.photos = getOldPhotos();
+        if (!body.photos.length) throw new Error('Take a photo (JPG) of the machine sticker');
+        Object.assign(body, locationValue());
+      } else { delete body.completedAt; }
+      await api('/staff/assembly/old', { method: 'POST', body });
+      toast(done ? 'Old machine added as assembled' : 'Added – finish it from your list');
+      renderStaff();
+    });
+    const getOldPhotos = photoPicker(document.getElementById('o-photos'));
+    bindLocation();
+    const st = document.getElementById('o-status');
+    const sync = () => {
+      const done = st.value !== 'no';
+      document.getElementById('o-done').hidden = !done;
+      ['a-ed', 'a-et'].forEach((id) => { document.getElementById(id).closest('div').hidden = !done; });
+    };
+    st.onchange = sync;
+    sync();
   };
   const req = document.getElementById('asm-req');
   if (req) req.onclick = async () => {
@@ -1689,10 +1746,12 @@ async function adminAssembly(main) {
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models3" required></div><div><label>Quantity</label><input name="qty" type="number" min="1" max="50" value="1"></div></div>
       <datalist id="asm-models3">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       ${sel('leaderId', ['leader'], '👷 Team leader *')}${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
-      ${asmTimesForm({}, '')}
+      ${asmTimesForm({}, '', true)}
+      ${asmLocationFields()}
       <label>Note</label><input name="note" placeholder="optional">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
-    async (fd) => { await api('/admin/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue() } }); toast('Old machine added'); renderAdmin(); });
+    async (fd) => { await api('/admin/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue(), ...locationValue() } }); toast('Old machine added'); renderAdmin(); });
+    bindLocation();
   };
   await drawBoard(state.asmMonth || monthNow(), s.maxPending, renderAdmin);
 }

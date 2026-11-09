@@ -1097,6 +1097,9 @@ function asmView(m) {
     incentive: m.incentive || null,
     note: m.note || '',
     photos: (m.photos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at })),
+    location: m.location || '',
+    dispatchParty: m.dispatchParty || '',
+    dispatchedAt: m.dispatchedAt || null,
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
   };
 }
@@ -1152,6 +1155,24 @@ function asmStart(m, by) {
   store.save();
   return { value: m };
 }
+// Where the machine is after assembly: in the godown or dispatched to a client.
+function readLocation(body) {
+  const location = str(body.location);
+  if (!['godown', 'dispatched'].includes(location)) return { error: 'Choose where the machine is now: In godown or Dispatched to client' };
+  const at = new Date().toISOString();
+  return { value: location === 'dispatched' ? { location, dispatchParty: str(body.party, 120), dispatchedAt: at } : { location, godownAt: at } };
+}
+function asmDispatch(m, body, by) {
+  if (m.status !== 'done') return { error: 'Only assembled machines can be dispatched' };
+  if (m.location === 'dispatched') return { error: 'Already dispatched' };
+  m.location = 'dispatched';
+  m.dispatchParty = str(body.party, 120);
+  m.dispatchedAt = new Date().toISOString();
+  m.dispatchedBy = by;
+  store.save();
+  return { value: m };
+}
+
 function asmComplete(m, body, by) {
   if (!['assigned', 'started'].includes(m.status)) return { error: 'This machine is not open' };
   const t = asmTimes(m, body, true);
@@ -1159,8 +1180,11 @@ function asmComplete(m, body, by) {
   // Photo of the machine sticker is compulsory (the admin may skip it).
   const ph = readPhotos(m, body.photos);
   if (ph.error) return ph;
-  if (!ph.value.length && !(m.photos || []).length && by !== 'admin') return { error: 'Take a photo of the machine sticker first' };
+  if (!ph.value.length && !(m.photos || []).length && by !== 'admin') return { error: 'Take a photo (JPG) of the machine sticker first' };
+  const loc = readLocation(body);
+  if (loc.error) return loc;
   savePhotos(m, ph.value, by);
+  Object.assign(m, loc.value);
   if (body.startedAt && t.value.started !== m.startedAt) m.timesEditedBy = by;
   if (body.completedAt) m.timesEditedBy = by;
   m.startedAt = t.value.started;
@@ -1197,6 +1221,7 @@ unit.get('/assembly', (req, res) => {
 });
 unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
 unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
+unit.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmDispatch(m, req.body, 'unit')); });
 unit.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmComplete(m, req.body, 'unit')); });
 
 // Staff (team leader / installation person / helper)
@@ -1229,6 +1254,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
 });
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
+app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmDispatch(m, req.body, req.user.account.name)); });
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
 // Team leader passes a machine to another team leader of the unit; ₹ per machine is
 // taken off the diverting leader's incentive (Assembly settings → divert deduction).
@@ -1264,23 +1290,46 @@ app.post('/api/staff/assembly/:id/divert', need('staff'), (req, res) => {
 
 // Team leader adds an old machine that was missed out; counted after the admin approves.
 app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
+  // Team leader adds an old machine that was missed out – added straight away (no approval).
+  // Completed: end date-time, sticker photo and godown / dispatched are compulsory.
+  // Still assembling: only the start; it shows in their list to finish later.
   const p = req.user.account;
   if (p.role !== 'leader') return bad(res, 'Only team leaders can add old machines');
   const model = str(req.body.model, 120);
   const qty = parseInt(req.body.qty, 10) || 1;
   if (!model) return bad(res, 'Enter the model no.');
   if (qty < 1 || qty > 10) return bad(res, 'Quantity must be 1 to 10');
-  const t = asmTimes({}, req.body, true);
-  if (t.error) return bad(res, t.error);
+  const completed = req.body.completed !== 'no';
   const crewOk = (id, roles) => !id || db().people.some((x) => x.id === id && !x.deleted && roles.includes(x.role));
   const installerId = str(req.body.installerId) || null;
   const helperId = str(req.body.helperId) || null;
   if (!crewOk(installerId, ['installer', 'both'])) return bad(res, 'Choose an installation person');
   if (!crewOk(helperId, ['helper', 'both'])) return bad(res, 'Choose a helper');
-  db().assemblyRequests.push({
-    id: newId('req'), type: 'old', leaderId: p.id, unitId: p.unitId, model, qty, installerId, helperId,
-    startedAt: t.value.started, completedAt: t.value.completed, note: str(req.body.note, 200), status: 'pending', createdAt: new Date().toISOString(),
-  });
+  let t;
+  if (completed) {
+    if (!req.body.completedAt) return bad(res, 'End date and time are compulsory for a completed machine');
+    t = asmTimes({}, req.body, true);
+  } else {
+    t = asmTimes({}, { startedAt: req.body.startedAt }, true); // end = now just for the check
+  }
+  if (t.error) return bad(res, t.error);
+  const loc = completed ? readLocation(req.body) : { value: {} };
+  if (loc.error) return bad(res, loc.error);
+  const ph = completed ? readPhotos({ photos: [] }, req.body.photos) : { value: [] };
+  if (ph.error) return bad(res, ph.error);
+  if (completed && !ph.value.length) return bad(res, 'Take a photo (JPG) of the machine sticker');
+  const made = [];
+  for (let i = 0; i < qty; i++) {
+    const m = {
+      id: newId('asm'), unitId: p.unitId, model, status: completed ? 'done' : 'started', source: 'old', leaderId: p.id, installerId, helperId,
+      createdAt: new Date().toISOString(), assignedAt: t.value.started, startedAt: t.value.started, completedAt: completed ? t.value.completed : null,
+      createdBy: p.name, entryBy: `${p.name} (old entry)`, timesEditedBy: p.name, note: str(req.body.note, 200), manual: true,
+      ...(completed ? { incentive: ASM.incentiveFor(db(), model), ...loc.value } : {}),
+    };
+    made.push(m);
+    db().assembly.push(m);
+  }
+  if (completed) { savePhotos(made[0], ph.value, p.name); for (const m of made.slice(1)) m.photos = made[0].photos.slice(); }
   store.save();
   res.json({ ok: true });
 });
@@ -1310,6 +1359,7 @@ admin.get('/assembly', (req, res) => {
 });
 admin.post('/assembly', (req, res) => send(res, addMachines(str(req.body.unitId), req.body, 'admin')));
 admin.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmStart(m, 'admin')); });
+admin.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmDispatch(m, req.body, 'admin')); });
 admin.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmComplete(m, req.body, 'admin')); });
 admin.post('/assembly/:id/times', (req, res) => {
   const m = asmFind(req, res);
@@ -1374,6 +1424,7 @@ admin.post('/assembly/old', (req, res) => {
       createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
       incentive: ASM.incentiveFor(db(), model),
+      ...(['godown', 'dispatched'].includes(req.body.location) ? readLocation(req.body).value : {}),
     });
   }
   store.save();
