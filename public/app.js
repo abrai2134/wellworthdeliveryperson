@@ -1385,6 +1385,7 @@ function asmCard(m, who, me) {
   if (canWork && open) btns.push(`<button class="small primary" data-asm-done="${esc(m.id)}">✓ Assembled</button>`);
   if (who === 'staff' && open && m.leader && m.leader.id === me) btns.push(`<button class="small" data-asm-divert="${esc(m.id)}">↪ Divert</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
+  if (canWork && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
   if (canWork && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
@@ -1397,6 +1398,7 @@ function asmCard(m, who, me) {
     ${m.status === 'done' && m.location ? `<div class="small" style="margin-top:4px">${m.location === 'dispatched' ? `<span class="badge ok">🚚 Dispatched</span>${m.dispatchParty ? ' to <b>' + esc(m.dispatchParty) + '</b>' : ''}${m.dispatchedAt ? ' · ' + esc(fmtTime(m.dispatchedAt)) : ''}` : '<span class="badge w4">🏬 In godown</span>'}</div>` : ''}
     ${m.incentive && (m.incentive.leader || m.incentive.installer) ? `<div class="small expense">🏆 Incentive: team leader ₹${m.incentive.leader} · installation ₹${m.incentive.installer}</div>` : ''}
     ${m.note ? `<div class="small">📝 ${esc(m.note)}</div>` : ''}
+    ${m.modelEdits && m.modelEdits.length ? `<div class="small muted">${m.modelEdits.map((x) => `✎ Model corrected: <s>${esc(x.from)}</s> → ${esc(x.to)} by ${esc(x.by)} ${esc(fmtTime(x.at))}`).join('<br>')}</div>` : ''}
     ${m.diverts && m.diverts.length ? `<div class="small absent-log">${m.diverts.map((x) => `↪ Diverted by <b>${esc(x.from)}</b> to <b>${esc(x.to)}</b> ${esc(fmtTime(x.at))}${x.amount ? ` · ₹${x.amount} deducted from ${esc(x.from)}` : ''}${x.reason ? ` (${esc(x.reason)})` : ''}`).join('<br>')}</div>` : ''}
     ${m.photos && m.photos.length ? `<div class="small" style="margin-top:6px"><b>🏷️ Sticker photo</b><div class="thumbs">${m.photos.map((ph) => `<span class="thumb"><a href="${esc(ph.url)}" target="_blank" rel="noopener"><img src="${esc(ph.url)}" alt="machine sticker" loading="lazy"></a></span>`).join('')}</div></div>` : ''}
     ${btns.length ? `<div class="row no-print" style="margin-top:8px">${btns.join('')}</div>` : ''}</div>`;
@@ -1503,6 +1505,22 @@ function bindAsm(root, base, items, reload) {
     });
     const getPhotos = photoPicker(document.getElementById('a-photos'));
     bindLocation();
+  }));
+  root.querySelectorAll('[data-asm-model]').forEach((b) => (b.onclick = async () => {
+    const m = find(b.dataset.asmModel);
+    const same = items.filter((x) => x.id !== m.id && x.model === m.model && (m.status === 'done' ? true : x.status !== 'done') && (base.startsWith('/staff') ? x.leader && m.leader && x.leader.id === m.leader.id : x.unitId === m.unitId)).length;
+    const models = await loadMachineList();
+    openModal(`<h2>✎ Edit model no.</h2><div class="muted">Now: ⚙️ ${esc(m.model)}</div>
+      <label>Correct model no. *</label><input name="model" list="asm-models-e" required value="${esc(m.model)}">
+      <datalist id="asm-models-e">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      ${same ? `<label class="check"><input type="checkbox" name="all" checked> Also change the other ${same} machine${same > 1 ? 's' : ''} with “${esc(m.model)}”</label>` : ''}
+      ${m.status === 'done' ? '<p class="small">This machine is assembled – the incentive is worked out again for the new model.</p>' : ''}
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => {
+      const r = await api(`${base}/${m.id}/model`, { method: 'POST', body: { model: fd.get('model'), all: fd.get('all') === 'on' } });
+      toast('Model no. corrected');
+      reload();
+    });
   }));
   root.querySelectorAll('[data-asm-dispatch]').forEach((b) => (b.onclick = () => {
     const m = find(b.dataset.asmDispatch);

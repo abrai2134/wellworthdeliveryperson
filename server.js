@@ -1098,6 +1098,7 @@ function asmView(m) {
     note: m.note || '',
     photos: (m.photos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at })),
     location: m.location || '',
+    modelEdits: (m.modelEdits || []).map((x) => ({ from: x.from, to: x.to, by: x.by, at: x.at })),
     dispatchParty: m.dispatchParty || '',
     dispatchedAt: m.dispatchedAt || null,
     diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
@@ -1162,6 +1163,24 @@ function readLocation(body) {
   const at = new Date().toISOString();
   return { value: location === 'dispatched' ? { location, dispatchParty: str(body.party, 120), dispatchedAt: at } : { location, godownAt: at } };
 }
+// Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
+function asmEditModel(m, body, by, scope) {
+  const model = str(body.model, 120);
+  if (!model) return { error: 'Enter the model no.' };
+  if (by !== 'admin' && !['waiting', 'assigned', 'started'].includes(m.status)) return { error: 'Assembled machines can be corrected by the admin only' };
+  const old = m.model;
+  if (model === old) return { error: 'The model no. is the same' };
+  const list = body.all ? db().assembly.filter((x) => x.model === old && scope(x) && (by === 'admin' || ['waiting', 'assigned', 'started'].includes(x.status))) : [m];
+  const at = new Date().toISOString();
+  for (const x of list) {
+    (x.modelEdits = x.modelEdits || []).push({ from: old, to: model, by, at });
+    x.model = model;
+    if (x.status === 'done') x.incentive = ASM.incentiveFor(db(), model); // incentive follows the right model
+  }
+  store.save();
+  return { value: { id: m.id, count: list.length } };
+}
+
 function asmDispatch(m, body, by) {
   if (m.status !== 'done') return { error: 'Only assembled machines can be dispatched' };
   if (m.location === 'dispatched') return { error: 'Already dispatched' };
@@ -1221,6 +1240,7 @@ unit.get('/assembly', (req, res) => {
 });
 unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
 unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
+unit.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmEditModel(m, req.body, 'unit', (x) => x.unitId === req.user.id)); });
 unit.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmDispatch(m, req.body, 'unit')); });
 unit.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmComplete(m, req.body, 'unit')); });
 
@@ -1254,6 +1274,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
 });
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
+app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id)); });
 app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmDispatch(m, req.body, req.user.account.name)); });
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
 // Team leader passes a machine to another team leader of the unit; ₹ per machine is
@@ -1359,6 +1380,7 @@ admin.get('/assembly', (req, res) => {
 });
 admin.post('/assembly', (req, res) => send(res, addMachines(str(req.body.unitId), req.body, 'admin')));
 admin.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmStart(m, 'admin')); });
+admin.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmEditModel(m, req.body, 'admin', (x) => x.unitId === m.unitId)); });
 admin.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmDispatch(m, req.body, 'admin')); });
 admin.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmComplete(m, req.body, 'admin')); });
 admin.post('/assembly/:id/times', (req, res) => {
