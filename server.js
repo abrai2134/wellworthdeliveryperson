@@ -1684,6 +1684,25 @@ app.get('/api/dispatch/board', (req, res) => (req.user ? res.json({ board: ASM.d
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 
+// Old stock already lying in a unit's godown (before this app): added straight to the godown,
+// no team / assembly incentive; the dispatch incentive applies when it goes to a client.
+function addOldStock(body, by) {
+  const unitId = str(body.unitId);
+  if (!liveUnit(unitId)) return { error: 'Choose the unit' };
+  const model = str(body.model, 120);
+  if (!model) return { error: 'Enter the model no.' };
+  const qty = parseInt(body.qty, 10);
+  if (!(qty >= 1 && qty <= 200)) return { error: 'Quantity must be 1 to 200' };
+  const at = new Date().toISOString();
+  for (let i = 0; i < qty; i++) {
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, entryBy: `${by} (old stock)`, note: str(body.note, 200) });
+  }
+  store.save();
+  return { value: { id: '', count: qty } };
+}
+app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name)));
+admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin')));
+
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
   const name = str(req.body.name, 80);

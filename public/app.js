@@ -1394,7 +1394,7 @@ function asmCard(m, who, me) {
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
   return `<div class="card unit-card${m.status === 'done' ? ' done' : ''}">
     <div class="row"><div class="name">⚙️ ${esc(m.model)}</div><div class="spacer"></div><span class="badge ${cls}">${label}</span></div>
-    <div class="small muted">${who !== 'unit' ? esc(m.unitName) + ' · ' : ''}${m.source === 'request' ? '📝 requested by team leader · ' : m.source === 'old' ? '📁 old entry · ' : ''}added ${esc(fmtTime(m.createdAt))}${m.entryBy ? ' by ' + esc(m.entryBy) : ''}</div>
+    <div class="small muted">${who !== 'unit' ? esc(m.unitName) + ' · ' : ''}${m.source === 'request' ? '📝 requested by team leader · ' : m.source === 'old' ? '📁 old entry · ' : m.source === 'stock' ? '📦 old stock · ' : ''}added ${esc(fmtTime(m.createdAt))}${m.entryBy ? ' by ' + esc(m.entryBy) : ''}</div>
     <div class="small" style="margin-top:6px">👷 Team leader: ${p(m.leader, 'none yet')}</div>
     <div class="small">🔧 Installation: ${p(m.installer, '')} · 🧰 Helper: ${p(m.helper, '')}</div>
     <div class="small muted" style="margin-top:4px">🕒 ${m.assignedAt ? `Given ${esc(fmtTime(m.assignedAt))}` : 'Not given yet'}${m.startedAt ? ` · Started ${esc(fmtTime(m.startedAt))}` : ''}${m.completedAt ? ` · <b>Assembled ${esc(fmtTime(m.completedAt))}</b>${work ? ` (${esc(work)})` : ''}` : open ? ` · pending ${esc(ageText(m.assignedAt))}` : ''}${m.timesEditedBy ? ` <span class="badge manual">✎ times by ${esc(m.timesEditedBy)}</span>` : ''}</div>
@@ -1777,6 +1777,7 @@ async function adminAssembly(main) {
         <div class="spacer"></div><input type="number" min="1" max="20" value="${q.qty}" data-req-qty="${esc(q.id)}" style="width:70px" title="Quantity to give">
         <button class="small primary" data-req-ok="${esc(q.id)}">Approve</button><button class="small danger" data-req-no="${esc(q.id)}">Reject</button></div>`).join('')}</div>` : ''}
     <div id="asm-board"></div>
+    <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}
     <div id="adm-dsp-board"></div>
     <div class="card section"><div class="row"><h2 style="margin:0">🚚 Dispatch logins</h2><div class="spacer"></div><button class="small primary" id="dsp-add">+ Add dispatch login</button></div>
@@ -1815,6 +1816,7 @@ async function adminAssembly(main) {
   document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
   bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
+  document.getElementById('add-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
   api('/dispatch/board').then((b) => { const box = document.getElementById('adm-dsp-board'); if (box) box.innerHTML = dispatchBoardHtml(b.board, monthNow(), false); });
   document.getElementById('dsp-add').onclick = () => openModal(`<h2>+ Dispatch login</h2>
       <label>Name *</label><input name="name" required>
@@ -1934,7 +1936,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   // One full-width list: a heading per unit, one line per model (qty, oldest, Send).
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span></div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head"><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></div>
-      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}</span></span>
+      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span></span>
         <span class="godown-qty">${m.qty}</span>${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
@@ -1989,6 +1991,18 @@ function dispatchBoardHtml(board, month, picker) {
     ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
 }
 
+// Old stock already in a unit's godown, entered before dispatching it.
+async function oldStockForm(url, units, reload) {
+  const models = await loadMachineList();
+  openModal(`<h2>📦 Add old stock</h2><p class="small">Machines already lying in a unit's godown. They are added to the godown stock and can then be sent. No assembly incentive; the dispatch incentive applies when sent to a client.</p>
+    <label>Unit *</label><select name="unitId" required><option value="">— choose —</option>${units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+    <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="os-models" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="200" value="1" required></div></div>
+    <datalist id="os-models">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+    <label>Note</label><input name="note" placeholder="optional (e.g. stock count 9 Nov)">
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add to godown</button></div>`,
+  async (fd) => { await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast(`${fd.get('qty')} added to godown`); reload(); });
+}
+
 async function renderDispatch() {
   $app.innerHTML = topbar('🚚 Dispatch: ' + state.me.name) + '<div class="wrap"><div class="loading">Loading…</div></div>';
   bindLogout();
@@ -1997,7 +2011,9 @@ async function renderDispatch() {
   wrap.innerHTML = `<div class="hero"><div class="label">🏆 My dispatch · ${esc(r.month)}</div>
       <div class="big">₹${r.me.incentive} incentive</div>
       <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients · ${r.me.toUnit} sent to other units</div></div>
+    <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true)}${historyHtml(r.history)}`;
+  document.getElementById('add-stock').onclick = () => oldStockForm('/dispatch/stock', r.units, renderDispatch);
   const mi = document.getElementById('dsp-month');
   if (mi) mi.onchange = (e) => { state.dspMonth = e.target.value; renderDispatch(); };
   bindSend(wrap, '/dispatch/send', r.units, renderDispatch);
