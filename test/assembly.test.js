@@ -147,3 +147,15 @@ test('monthly bonus for dispatch to other units follows the slabs', () => {
   const s = DEFAULT_SETTINGS.unitDispatchSlabs;
   assert.deepEqual([0, 1, 10, 11, 20, 21, 30, 31, 80].map((n) => unitDispatchBonus(s, n)), [0, 200, 200, 350, 350, 450, 450, 600, 600]);
 });
+
+test('new machines go to the team with the fewest open machines, even if it assembled more', () => {
+  const db = setup();
+  db.settings.assembly = { maxPending: 50 };
+  db.people = db.people.filter((p) => p.id !== 'L3');
+  const put = (leaderId, status, qty) => { for (let i = 0; i < qty; i++) db.assembly.push({ id: 'x' + ++n, unitId: 'u1', model: 'FT224BK', status, leaderId, installerId: 'i1', helperId: 'h1', manual: true, createdAt: '000000' }); };
+  put('L1', 'started', 6); put('L1', 'assigned', 4); put('L1', 'done', 1); // Satish: 10 open, 1 assembled
+  put('L2', 'started', 4); put('L2', 'done', 12); // Tamanna: 4 open, 12 assembled
+  add(db, 4);
+  const newOnes = db.assembly.filter((m) => m.id.startsWith('m')).slice(-4);
+  assert.deepEqual(newOnes.map((m) => m.leaderId), ['L2', 'L2', 'L2', 'L2']);
+});
