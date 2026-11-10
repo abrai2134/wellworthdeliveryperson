@@ -1711,6 +1711,8 @@ function addOldStock(body, by) {
 }
 app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name)));
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin')));
+// A unit adds old stock to its own godown only.
+unit.post('/assembly/old-stock', (req, res) => send(res, addOldStock({ ...req.body, unitId: req.user.id }, (req.user.account.name || req.user.account.username) + ' (unit)')));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {

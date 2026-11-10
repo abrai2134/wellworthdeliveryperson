@@ -1686,13 +1686,14 @@ async function renderUnitAssembly() {
   wrap.innerHTML = `${unitSwitchHtml('assembly')}
     <div class="row section"><div><h1 style="margin:0">🛠️ Assembly</h1>
       <div class="small muted">Team leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending${l.pending >= r.maxPending ? ' – full' : ''})`).join(' · ') || 'none – ask the admin to add team leaders'}</div></div>
-      <div class="spacer"></div><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+      <div class="spacer"></div><button id="add-stock">📦 Add stock</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     ${asmList(r.items, 'unit')}
     <div id="u-godown"></div>
     <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
   api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
   bindUnitSwitch();
   document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
+  document.getElementById('add-stock').onclick = () => oldStockForm('/unit/assembly/old-stock', [{ id: state.me.id, name: state.me.name }], renderUnit);
   bindAsm(wrap, '/unit/assembly', r.items, renderUnit);
   await drawBoard(month, r.maxPending, renderUnit);
 }
@@ -1808,7 +1809,7 @@ async function adminAssembly(main) {
         <div class="sub-line small"><span class="muted">${x ? x.pending : 0} pending</span>${telLink(p.phone)}<button class="link small" data-edit-leader="${esc(p.id)}">Edit</button><button class="link small danger" data-del-leader="${esc(p.id)}">Remove</button></div></div>`; }).join('') : '<div class="small muted" style="margin-top:6px">No team leader yet.</div>'}</div>`;
   }).join('');
   main.innerHTML = `<div class="row section"><h1 style="margin:0">🛠️ Assembly</h1><div class="spacer"></div>
-      <button id="asm-old">📁 Add old machine</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+      <button id="asm-old">📁 Add old machine</button><button id="asm-stock">📦 Add stock</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     <div class="section"><h2>👷 Team leaders by unit</h2><div class="muted small" style="margin-bottom:8px">Machines of a unit are shared equally between its team leaders (each with 1 installation person + 1 helper of the unit). Adding a leader gives out waiting machines at once; removing one sends their unfinished machines back to the others. Give a PIN so the leader can log in.</div>
       <div class="grid">${leaderCards}</div></div>
     ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2><div class="small muted">📝 = wants new machines · 📁 = old machine to add to their record</div>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
@@ -1933,6 +1934,7 @@ async function adminAssembly(main) {
     body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value })).filter((x) => x.model.trim());
     try { await api('/admin/assembly/settings', { method: 'PUT', body }); toast('Assembly settings saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
   };
+  document.getElementById('asm-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
   document.getElementById('asm-old').onclick = async () => {
     const ppl = A().people.filter((p) => p.active || true);
     const sel = (name, roles, label) => `<label>${label}</label><select name="${name}"><option value="">— none —</option>${ppl.filter((p) => roles.includes(p.role)).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.unitName || '—')})</option>`).join('')}</select>`;
@@ -2063,7 +2065,7 @@ function dispatchBoardHtml(board, month, picker) {
 async function oldStockForm(url, units, reload) {
   const models = await loadMachineList();
   openModal(`<h2>📦 Add old stock</h2><p class="small">Machines already lying in a unit's godown. They are added to the godown stock and can then be sent. No assembly incentive; the dispatch incentive applies when sent to a client.</p>
-    <label>Unit *</label><select name="unitId" required><option value="">— choose —</option>${units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+    <label>Unit *</label><select name="unitId" required>${units.length === 1 ? '' : '<option value="">— choose —</option>'}${units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
     <label>Stock type *</label>
     <div class="row"><label class="check"><input type="radio" name="kind" value="godown"> 🏬 Godown stock</label><label class="check"><input type="radio" name="kind" value="party"> 👤 Booked for a client</label></div>
     <div id="os-party-wrap" class="lookup" hidden><label>Client (party) name *</label><input name="party" id="os-party" autocomplete="off" placeholder="type party name to search"><div id="os-party-list" class="lookup-list" hidden></div></div>
