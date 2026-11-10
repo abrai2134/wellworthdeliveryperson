@@ -465,6 +465,89 @@ async function loadMakers() {
   return state.makers;
 }
 
+// ----- model no. search (all logins) -----
+// Every model box (inputs using a model <datalist>) gets this search instead of the browser's own
+// list: "FT24BK" finds "FT~24BK (DUAL SUCTION POINT)" because ~, spaces, brackets and case are ignored.
+const mKey = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const mBase = (v) => mKey(String(v || '').split('(')[0]);
+const isModelList = (id) => id === 'machine-list' || /^(asm-models|r-models|os-models)/.test(id || '');
+const modelPop = { el: null, input: null, items: [], active: -1 };
+function modelOptions(input) {
+  const dl = document.getElementById(input.dataset.models);
+  return dl ? [...dl.options].map((o) => o.value).filter(Boolean) : [];
+}
+function modelExact(input) {
+  const opts = modelOptions(input);
+  const v = input.value;
+  if (!mKey(v)) return null;
+  const exact = opts.find((o) => mKey(o) === mKey(v));
+  if (exact) return exact;
+  const hits = opts.filter((o) => mBase(o) === mBase(v));
+  return hits.length === 1 ? hits[0] : null;
+}
+function hideModelPop() { if (modelPop.el) modelPop.el.hidden = true; modelPop.active = -1; }
+function pickModel(value) {
+  const input = modelPop.input;
+  hideModelPop();
+  if (!input) return;
+  input.value = value;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function showModelPop(input) {
+  const k = mKey(input.value);
+  const opts = modelOptions(input);
+  const list = (k ? opts.filter((o) => mKey(o).includes(k)) : opts)
+    .sort((a, b) => (k ? Number(!mKey(a).startsWith(k)) - Number(!mKey(b).startsWith(k)) : 0))
+    .slice(0, 40);
+  if (!modelPop.el) {
+    modelPop.el = document.createElement('div');
+    modelPop.el.className = 'lookup-list model-pop';
+    modelPop.el.addEventListener('mousedown', (e) => { const b = e.target.closest('[data-pick]'); if (b) { e.preventDefault(); pickModel(modelPop.items[Number(b.dataset.pick)]); } });
+  }
+  // inside a pop-up (<dialog>) the list must live in the dialog, or it shows behind it
+  const host = input.closest('dialog') || document.body;
+  if (modelPop.el.parentNode !== host) host.appendChild(modelPop.el);
+  modelPop.input = input;
+  modelPop.items = list;
+  modelPop.active = -1;
+  if (!list.length || (list.length === 1 && list[0] === input.value)) return hideModelPop();
+  const r = input.getBoundingClientRect();
+  Object.assign(modelPop.el.style, { position: 'fixed', left: r.left + 'px', top: r.bottom + 2 + 'px', width: Math.max(r.width, 260) + 'px', maxHeight: Math.max(120, Math.min(280, window.innerHeight - r.bottom - 10)) + 'px', overflowY: 'auto', zIndex: 2000 });
+  modelPop.el.innerHTML = list.map((o, i) => `<div class="lookup-item" data-pick="${i}">${esc(o)}</div>`).join('');
+  modelPop.el.hidden = false;
+}
+document.addEventListener('focusin', (e) => {
+  const el = e.target;
+  if (el.tagName !== 'INPUT') return;
+  if (el.getAttribute('list') && isModelList(el.getAttribute('list'))) {
+    el.dataset.models = el.getAttribute('list');
+    el.removeAttribute('list');
+    el.setAttribute('autocomplete', 'off');
+  }
+  if (el.dataset.models) showModelPop(el);
+});
+document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.models) showModelPop(e.target); });
+document.addEventListener('focusout', (e) => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.models) return;
+  const hit = modelExact(el);
+  if (hit && hit !== el.value) { el.value = hit; el.dispatchEvent(new Event('change', { bubbles: true })); }
+  setTimeout(() => { if (modelPop.input === el && document.activeElement !== el) hideModelPop(); }, 150);
+});
+document.addEventListener('keydown', (e) => {
+  if (!modelPop.el || modelPop.el.hidden || e.target !== modelPop.input) return;
+  const n = modelPop.items.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    modelPop.active = (modelPop.active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    modelPop.el.querySelectorAll('[data-pick]').forEach((d, i) => d.classList.toggle('active', i === modelPop.active));
+  } else if (e.key === 'Enter' && modelPop.active >= 0) {
+    e.preventDefault();
+    pickModel(modelPop.items[modelPop.active]);
+  } else if (e.key === 'Escape') hideModelPop();
+});
+window.addEventListener('scroll', () => { if (modelPop.input && modelPop.el && !modelPop.el.hidden) showModelPop(modelPop.input); }, true);
+
 async function loadMachineList() {
   if (state.machineList && Date.now() - state.machineListAt < 5 * 60 * 1000) return state.machineList;
   try {
@@ -1667,7 +1750,7 @@ async function asmAddForm(base, reload) {
       <div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
     <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
     <label>Note</label><input name="note" placeholder="optional">
-    <p class="muted small">Each machine goes to the team leader with the fewest machines (with 1 installation person + 1 helper). A team leader with too many pending gets none – the machine waits for the next free leader.</p>
+    <p class="muted small">Each machine goes to the team leader whose team has the fewest machines open (with 1 installation person + 1 helper). A team leader with too many pending gets none – the machine waits for the next free leader.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
   async (fd) => { await api(`${base}/assembly`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
 }

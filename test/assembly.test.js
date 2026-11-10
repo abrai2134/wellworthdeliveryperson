@@ -159,3 +159,12 @@ test('new machines go to the team with the fewest open machines, even if it asse
   const newOnes = db.assembly.filter((m) => m.id.startsWith('m')).slice(-4);
   assert.deepEqual(newOnes.map((m) => m.leaderId), ['L2', 'L2', 'L2', 'L2']);
 });
+
+test('model no. matches without ~, spaces, case or the description in brackets', () => {
+  assert.ok(A.sameModel('FT24BK', 'FT~24BK (DUAL SUCTION POINT)'));
+  assert.ok(A.sameModel('ft 24 bk', 'FT~24BK'));
+  assert.ok(!A.sameModel('FT24BK', 'FT30~BK ( DUAL SUCTION POINT )'));
+  const db = setup();
+  db.settings.assembly = { incentives: [{ model: 'FT~24BK (DUAL SUCTION POINT)', leader: 250, installer: 120 }] };
+  assert.deepEqual(A.incentiveFor(db, 'FT24BK'), { leader: 250, installer: 120 });
+});

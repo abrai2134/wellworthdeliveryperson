@@ -274,7 +274,7 @@ function readDelivery(body, unitId, opts = {}) {
   // Machines: list of { label, qty }. Older jobs only had a free-text "machine".
   let items = Array.isArray(body.items) ? body.items : [];
   items = items
-    .map((i) => ({ label: str(i && i.label, 120), qty: Math.max(1, Math.min(999, parseInt(i && i.qty, 10) || 1)) }))
+    .map((i) => ({ label: canonModel(i && i.label), qty: Math.max(1, Math.min(999, parseInt(i && i.qty, 10) || 1)) }))
     .filter((i) => i.label)
     .slice(0, 20);
   const machine = items.length ? items.map((i) => `${i.label} × ${i.qty}`).join(', ').slice(0, 600) : str(body.machine, 120);
@@ -1120,6 +1120,19 @@ function asmView(m) {
   };
 }
 const asmSettings = () => ASM.settings(db());
+// Typed model no. -> the name in the machine list, so "FT24BK" is saved as "FT~24BK (DUAL SUCTION POINT)".
+// Exact match (ignoring ~, spaces, case) first; then the model part before the brackets, only if
+// that points to one machine. Otherwise it is kept as typed.
+function canonModel(typed) {
+  const t = str(typed, 120);
+  if (!t) return t;
+  const list = db().machines.map((m) => m.label).filter(Boolean);
+  const exact = list.find((l) => ASM.key(l) === ASM.key(t));
+  if (exact) return exact;
+  const base = ASM.baseKey(t);
+  const hits = list.filter((l) => ASM.baseKey(l) === base);
+  return hits.length === 1 ? hits[0] : t;
+}
 function asmAssign() {
   ASM.assignWaiting(db(), db().settings.timezone);
 }
@@ -1136,7 +1149,7 @@ function readEntry(body) {
 }
 function addMachines(unitId, body, by) {
   if (!liveUnit(unitId)) return { error: 'Choose a unit' };
-  const model = str(body.model, 120);
+  const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
@@ -1181,7 +1194,7 @@ function readLocation(body) {
 }
 // Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
 function asmEditModel(m, body, by, scope) {
-  const model = str(body.model, 120);
+  const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   if (by !== 'admin' && !['waiting', 'assigned', 'started'].includes(m.status)) return { error: 'Assembled machines can be corrected by the admin only' };
   const old = m.model;
@@ -1367,7 +1380,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
   // Still assembling: only the start; it shows in their list to finish later.
   const p = req.user.account;
   if (p.role !== 'leader') return bad(res, 'Only team leaders can add old machines');
-  const model = str(req.body.model, 120);
+  const model = canonModel(req.body.model);
   const qty = parseInt(req.body.qty, 10) || 1;
   if (!model) return bad(res, 'Enter the model no.');
   if (qty < 1 || qty > 10) return bad(res, 'Quantity must be 1 to 10');
@@ -1409,7 +1422,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
 app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'leader') return bad(res, 'Only team leaders can request machines');
-  const model = str(req.body.model, 120);
+  const model = canonModel(req.body.model);
   const qty = parseInt(req.body.qty, 10);
   if (!model) return bad(res, 'Enter the model no.');
   if (!(qty >= 1 && qty <= 20)) return bad(res, 'Quantity must be 1 to 20');
@@ -1488,7 +1501,7 @@ admin.post('/assembly/:id/assign', (req, res) => {
 admin.post('/assembly/old', (req, res) => {
   const unitId = str(req.body.unitId);
   if (!liveUnit(unitId)) return bad(res, 'Choose a unit');
-  const model = str(req.body.model, 120);
+  const model = canonModel(req.body.model);
   if (!model) return bad(res, 'Enter the model no.');
   const qty = parseInt(req.body.qty, 10) || 1;
   if (qty < 1 || qty > 50) return bad(res, 'Quantity must be 1 to 50');
@@ -1566,7 +1579,7 @@ app.post('/api/staff/assembly/incentives', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'leader') return bad(res, 'Only team leaders can add incentive rates');
   const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
-  const model = str(req.body.model, 120);
+  const model = canonModel(req.body.model);
   if (!model) return bad(res, 'Enter the model no.');
   const s = { ...asmSettings() };
   const stamp = { addedBy: p.name, addedAt: new Date().toISOString() };
@@ -1597,10 +1610,10 @@ admin.put('/assembly/settings', (req, res) => {
       ? b.unitDispatchSlabs.map((x) => ({ from: Math.max(1, parseInt(x && x.from, 10) || 0), amount: money(x && x.amount) })).filter((x) => x.from >= 1).sort((a, c) => a.from - c.from).slice(0, 10)
       : cur.unitDispatchSlabs,
     dispatchIncentives: Array.isArray(b.dispatchIncentives)
-      ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount), ...addedBy(cur.dispatchIncentives, x) })).filter((x) => x.model).slice(0, 300)
+      ? b.dispatchIncentives.map((x) => ({ model: canonModel(x && x.model), amount: money(x && x.amount), ...addedBy(cur.dispatchIncentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.dispatchIncentives || [],
     incentives: Array.isArray(b.incentives)
-      ? b.incentives.map((x) => ({ model: str(x && x.model, 120), leader: money(x && x.leader), installer: money(x && x.installer), ...addedBy(cur.incentives, x) })).filter((x) => x.model).slice(0, 300)
+      ? b.incentives.map((x) => ({ model: canonModel(x && x.model), leader: money(x && x.leader), installer: money(x && x.installer), ...addedBy(cur.incentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
   asmAssign();
@@ -1698,7 +1711,7 @@ admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { na
 function addOldStock(body, by) {
   const unitId = str(body.unitId);
   if (!liveUnit(unitId)) return { error: 'Choose the unit' };
-  const model = str(body.model, 120);
+  const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 200)) return { error: 'Quantity must be 1 to 200' };

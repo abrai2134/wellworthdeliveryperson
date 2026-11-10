@@ -240,3 +240,7 @@ button.small { padding: 6px 10px; font-size: .85rem; }
 .asm-cluster > .dr-body { padding: 0 0 0 16px; }
 .asm-cluster > .dr-body > .asm-row { border-left: 3px solid var(--line); }
 .asm-group .dl-head.row { flex-wrap: wrap; }
+/* model no. search dropdown (fixed under the box, works inside pop-ups) */
+.model-pop { right: auto; }
+.model-pop .lookup-item { padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px; }
+.model-pop .lookup-item:hover, .model-pop .lookup-item.active { background: #f0f6fd; }
