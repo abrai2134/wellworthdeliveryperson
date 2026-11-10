@@ -1693,7 +1693,7 @@ async function renderUnitAssembly() {
   api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
   bindUnitSwitch();
   document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
-  document.getElementById('add-stock').onclick = () => oldStockForm('/unit/assembly/old-stock', [{ id: state.me.id, name: state.me.name }], renderUnit);
+  document.getElementById('add-stock').onclick = () => oldStockForm('/unit/assembly/old-stock', [{ id: state.me.id, name: state.me.name }], renderUnit, true);
   bindAsm(wrap, '/unit/assembly', r.items, renderUnit);
   await drawBoard(month, r.maxPending, renderUnit);
 }
@@ -2062,12 +2062,13 @@ function dispatchBoardHtml(board, month, picker) {
 }
 
 // Old stock already in a unit's godown, entered before dispatching it.
-async function oldStockForm(url, units, reload) {
+// godownOnly: units add plain godown stock only (no "Booked for a client").
+async function oldStockForm(url, units, reload, godownOnly) {
   const models = await loadMachineList();
   openModal(`<h2>📦 Add old stock</h2><p class="small">Machines already lying in a unit's godown. They are added to the godown stock and can then be sent. No assembly incentive; the dispatch incentive applies when sent to a client.</p>
     <label>Unit *</label><select name="unitId" required>${units.length === 1 ? '' : '<option value="">— choose —</option>'}${units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
-    <label>Stock type *</label>
-    <div class="row"><label class="check"><input type="radio" name="kind" value="godown"> 🏬 Godown stock</label><label class="check"><input type="radio" name="kind" value="party"> 👤 Booked for a client</label></div>
+    ${godownOnly ? '<input type="hidden" name="kind" value="godown">' : `<label>Stock type *</label>
+    <div class="row"><label class="check"><input type="radio" name="kind" value="godown"> 🏬 Godown stock</label><label class="check"><input type="radio" name="kind" value="party"> 👤 Booked for a client</label></div>`}
     <div id="os-party-wrap" class="lookup" hidden><label>Client (party) name *</label><input name="party" id="os-party" autocomplete="off" placeholder="type party name to search"><div id="os-party-list" class="lookup-list" hidden></div></div>
     <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="os-models" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="200" value="1" required></div></div>
     <datalist id="os-models">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
