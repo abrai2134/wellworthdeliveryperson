@@ -166,5 +166,7 @@ test('model no. matches without ~, spaces, case or the description in brackets',
   assert.ok(!A.sameModel('FT24BK', 'FT30~BK ( DUAL SUCTION POINT )'));
   const db = setup();
   db.settings.assembly = { incentives: [{ model: 'FT~24BK (DUAL SUCTION POINT)', leader: 250, installer: 120 }] };
-  assert.deepEqual(A.incentiveFor(db, 'FT24BK'), { leader: 250, installer: 120 });
+  const inc = A.incentiveFor(db, 'FT24BK');
+  assert.equal(inc.leader, 250);
+  assert.equal(inc.installer, 120);
 });
