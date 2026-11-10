@@ -1593,6 +1593,9 @@ admin.put('/assembly/settings', (req, res) => {
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
     maxInstallerPending: Math.max(1, Math.min(50, parseInt(b.maxInstallerPending, 10) || cur.maxInstallerPending || 10)),
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
+    unitDispatchSlabs: Array.isArray(b.unitDispatchSlabs)
+      ? b.unitDispatchSlabs.map((x) => ({ from: Math.max(1, parseInt(x && x.from, 10) || 0), amount: money(x && x.amount) })).filter((x) => x.from >= 1).sort((a, c) => a.from - c.from).slice(0, 10)
+      : cur.unitDispatchSlabs,
     dispatchIncentives: Array.isArray(b.dispatchIncentives)
       ? b.dispatchIncentives.map((x) => ({ model: str(x && x.model, 120), amount: money(x && x.amount), ...addedBy(cur.dispatchIncentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.dispatchIncentives || [],
@@ -1680,11 +1683,13 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const board = ASM.dispatchBoard(db(), month);
   res.json({
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
-    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0 },
+    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0, clientIncentive: 0, unitBonus: 0 },
+    unitDispatchSlabs: asmSettings().unitDispatchSlabs,
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
-app.get('/api/dispatch/board', (req, res) => (req.user ? res.json({ board: ASM.dispatchBoard(db(), monthOf(req.query.month)) }) : res.status(401).json({ error: 'Please log in' })));
+// Dispatch money is for the admin and dispatch logins only (not team leaders / units).
+app.get('/api/dispatch/board', (req, res) => (req.user && ['admin', 'dispatch'].includes(req.user.role) ? res.json({ board: ASM.dispatchBoard(db(), monthOf(req.query.month)) }) : res.status(403).json({ error: 'Not allowed' })));
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 

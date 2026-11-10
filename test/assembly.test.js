@@ -141,3 +141,9 @@ test('a machine left without an installation person gets one when someone finish
   A.assignWaiting(db, 'Asia/Kolkata');
   assert.equal(db.assembly.filter((m) => !m.installerId && m.status !== 'done').length, 0);
 });
+
+test('monthly bonus for dispatch to other units follows the slabs', () => {
+  const { unitDispatchBonus, DEFAULT_SETTINGS } = require('../lib/assembly');
+  const s = DEFAULT_SETTINGS.unitDispatchSlabs;
+  assert.deepEqual([0, 1, 10, 11, 20, 21, 30, 31, 80].map((n) => unitDispatchBonus(s, n)), [0, 200, 200, 350, 350, 450, 450, 600, 600]);
+});
