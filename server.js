@@ -1700,11 +1700,17 @@ function godownHistory(days = 30) {
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const month = monthOf(req.query.month);
-  // The godown transfer bonus (rates and amounts) is for the admin only.
-  const board = ASM.dispatchBoard(db(), month).map(hideTransferBonus);
+  // Each dispatch person sees their own godown transfer bonus (to the bonus unit, e.g. ShilphataL1L2);
+  // the slab rates and other people's bonus stay with the admin.
+  const full = ASM.dispatchBoard(db(), month);
+  const mine = full.find((r) => r.id === req.user.id);
+  const board = full.map(hideTransferBonus);
   res.json({
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
-    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0 },
+    month, board,
+    me: mine ? { toClient: mine.toClient, toUnit: mine.toUnit, toBonusUnit: mine.toBonusUnit, clientIncentive: mine.clientIncentive, unitBonus: mine.unitBonus, incentive: mine.incentive }
+      : { toClient: 0, toUnit: 0, toBonusUnit: 0, clientIncentive: 0, unitBonus: 0, incentive: 0 },
+    bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));

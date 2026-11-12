@@ -2181,7 +2181,8 @@ async function renderDispatch() {
   const wrap = $app.querySelector('.wrap');
   wrap.innerHTML = `<div class="hero"><div class="label">🏆 My dispatch · ${esc(r.month)}</div>
       <div class="big">₹${r.me.incentive} incentive</div>
-      <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients · ${r.me.toUnit} sent to other units</div></div>
+      <div class="line">🚚 ${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients: <b>₹${r.me.clientIncentive}</b></div>
+      <div class="line">🔁 ${r.me.toBonusUnit} sent to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')}: <b>₹${r.me.unitBonus}</b> transfer bonus${r.me.toUnit > r.me.toBonusUnit ? ` <span class="small">(${r.me.toUnit - r.me.toBonusUnit} sent to other units – no bonus)</span>` : ''}</div></div>
     <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true)}${historyHtml(r.history)}`;
   document.getElementById('add-stock').onclick = () => oldStockForm('/dispatch/stock', r.units, renderDispatch);
