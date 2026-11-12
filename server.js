@@ -1700,17 +1700,23 @@ function godownHistory(days = 30) {
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const month = monthOf(req.query.month);
-  const board = ASM.dispatchBoard(db(), month);
+  // The godown transfer bonus (rates and amounts) is for the admin only.
+  const board = ASM.dispatchBoard(db(), month).map(hideTransferBonus);
   res.json({
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
-    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0, clientIncentive: 0, unitBonus: 0 },
-    unitDispatchSlabs: asmSettings().unitDispatchSlabs,
-    bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
+    month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0 },
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
 // Dispatch money is for the admin and dispatch logins only (not team leaders / units).
-app.get('/api/dispatch/board', (req, res) => (req.user && ['admin', 'dispatch'].includes(req.user.role) ? res.json({ board: ASM.dispatchBoard(db(), monthOf(req.query.month)) }) : res.status(403).json({ error: 'Not allowed' })));
+function hideTransferBonus(r) {
+  return { id: r.id, name: r.name, toClient: r.toClient, toUnit: r.toUnit, incentive: r.clientIncentive };
+}
+app.get('/api/dispatch/board', (req, res) => {
+  if (!req.user || !['admin', 'dispatch'].includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
+  const board = ASM.dispatchBoard(db(), monthOf(req.query.month));
+  res.json({ board: req.user.role === 'admin' ? board : board.map(hideTransferBonus) });
+});
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 

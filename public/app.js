@@ -2143,15 +2143,11 @@ function bindSend(root, url, units, reload) {
   }));
 }
 
-// "Send 3 more to other units this month for ₹350" – shown only in the Dispatch login.
-function udsNext(slabs, count, where) {
-  const next = (slabs || []).slice().sort((a, b) => a.from - b.from).find((s) => s.from > count);
-  return next ? `<div class="line small">🔁 Send ${next.from - count} more to ${esc(where || 'the bonus unit')} this month for a ₹${next.amount} bonus</div>` : '';
-}
 function dispatchBoardHtml(board, month, picker) {
+  const admin = board.some((x) => x.unitBonus !== undefined); // transfer bonus: admin only
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Dispatch scoreboard</h2><div class="spacer"></div>${picker ? `<input type="month" id="dsp-month" value="${esc(month)}" style="width:auto">` : `<span class="badge">${esc(month)}</span>`}</div>
-    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">To other units</th><th class="num">Client incentive</th><th class="num">Unit bonus</th><th class="num">Total</th></tr></thead><tbody>
-    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}${x.toBonusUnit !== undefined && x.toBonusUnit !== x.toUnit ? `<div class="small muted">${x.toBonusUnit} for bonus</div>` : ''}</td><td class="num">₹${x.clientIncentive ?? x.incentive}</td><td class="num">${x.unitBonus ? `₹${x.unitBonus}` : '—'}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
+    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">To other units</th>${admin ? '<th class="num">Client incentive</th><th class="num">Transfer bonus</th><th class="num">Total</th>' : '<th class="num">Incentive</th>'}</tr></thead><tbody>
+    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}${x.toBonusUnit !== undefined && x.toBonusUnit !== x.toUnit ? `<div class="small muted">${x.toBonusUnit} for bonus</div>` : ''}</td>${admin ? `<td class="num">₹${x.clientIncentive}</td><td class="num">${x.unitBonus ? `₹${x.unitBonus}` : '—'}</td>` : ''}<td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
 }
 
 // Old stock already in a unit's godown, entered before dispatching it.
@@ -2185,8 +2181,7 @@ async function renderDispatch() {
   const wrap = $app.querySelector('.wrap');
   wrap.innerHTML = `<div class="hero"><div class="label">🏆 My dispatch · ${esc(r.month)}</div>
       <div class="big">₹${r.me.incentive} incentive</div>
-      <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients (₹${r.me.clientIncentive || 0}) · ${r.me.toUnit} sent to other units, ${r.me.toBonusUnit || 0} of them to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')} (bonus ₹${r.me.unitBonus || 0})</div>
-      ${udsNext(r.unitDispatchSlabs, r.me.toBonusUnit || 0, (r.bonusUnitNames || []).join(' / '))}</div>
+      <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients · ${r.me.toUnit} sent to other units</div></div>
     <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true)}${historyHtml(r.history)}`;
   document.getElementById('add-stock').onclick = () => oldStockForm('/dispatch/stock', r.units, renderDispatch);
