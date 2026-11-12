@@ -145,7 +145,7 @@ test('a machine left without an installation person gets one when someone finish
 test('monthly bonus for dispatch to other units follows the slabs', () => {
   const { unitDispatchBonus, DEFAULT_SETTINGS } = require('../lib/assembly');
   const s = DEFAULT_SETTINGS.unitDispatchSlabs;
-  assert.deepEqual([0, 1, 10, 11, 20, 21, 30, 31, 80].map((n) => unitDispatchBonus(s, n)), [0, 200, 200, 350, 350, 450, 450, 600, 600]);
+  assert.deepEqual([0, 1, 10, 11, 20, 21, 30, 31, 80].map((n) => unitDispatchBonus(s, n)), [0, 100, 100, 175, 175, 225, 225, 300, 300]);
 });
 
 test('new machines go to the team with the fewest open machines, even if it assembled more', () => {
@@ -169,4 +169,18 @@ test('model no. matches without ~, spaces, case or the description in brackets',
   const inc = A.incentiveFor(db, 'FT24BK');
   assert.equal(inc.leader, 250);
   assert.equal(inc.installer, 120);
+});
+
+test('godown transfer bonus counts only transfers to the Shilphata unit', () => {
+  const db = setup();
+  db.units.push({ id: 'u3', name: 'SHIL PHATA', active: true });
+  db.dispatchers = [{ id: 'd1', name: 'Disp' }];
+  const at = '2026-11-05T10:00:00Z';
+  for (let i = 0; i < 12; i++) db.assembly.push({ id: 't' + i, unitId: i < 3 ? 'u2' : 'u3', model: 'X', status: 'done', location: 'godown', transfers: [{ from: 'u1', to: i < 3 ? 'u2' : 'u3', at, dispatcherId: 'd1' }] });
+  const r = A.dispatchBoard(db, '2026-11')[0];
+  assert.equal(r.toUnit, 12);
+  assert.equal(r.toBonusUnit, 9);
+  assert.equal(r.unitBonus, 100);
+  db.settings.assembly = { unitDispatchUnits: ['u2', 'u3'] };
+  assert.equal(A.dispatchBoard(db, '2026-11')[0].unitBonus, 175);
 });

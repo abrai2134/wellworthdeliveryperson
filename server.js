@@ -1120,6 +1120,11 @@ function asmView(m) {
   };
 }
 const asmSettings = () => ASM.settings(db());
+// Transfer bonus cut to 50%: switch the saved slabs over once, unless the admin had changed them.
+{
+  const a = db().settings.assembly;
+  if (a && JSON.stringify(a.unitDispatchSlabs) === JSON.stringify(ASM.OLD_UNIT_SLABS)) { a.unitDispatchSlabs = ASM.DEFAULT_SETTINGS.unitDispatchSlabs; store.save(); }
+}
 // Typed model no. -> the name in the machine list, so "FT24BK" is saved as "FT~24BK (DUAL SUCTION POINT)".
 // Exact match (ignoring ~, spaces, case) first; then the model part before the brackets, only if
 // that points to one machine. Otherwise it is kept as typed.
@@ -1439,6 +1444,7 @@ admin.get('/assembly', (req, res) => {
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
       .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
     settings: asmSettings(),
+    bonusUnits: ASM.bonusUnits(db()),
     stock: ASM.stock(db()),
     dispatchers: db().dispatchers.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
     leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
@@ -1606,6 +1612,7 @@ admin.put('/assembly/settings', (req, res) => {
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
     maxInstallerPending: Math.max(1, Math.min(50, parseInt(b.maxInstallerPending, 10) || cur.maxInstallerPending || 10)),
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
+    unitDispatchUnits: Array.isArray(b.unitDispatchUnits) ? b.unitDispatchUnits.map((x) => str(x)).filter((id) => db().units.some((u) => u.id === id)) : cur.unitDispatchUnits,
     unitDispatchSlabs: Array.isArray(b.unitDispatchSlabs)
       ? b.unitDispatchSlabs.map((x) => ({ from: Math.max(1, parseInt(x && x.from, 10) || 0), amount: money(x && x.amount) })).filter((x) => x.from >= 1).sort((a, c) => a.from - c.from).slice(0, 10)
       : cur.unitDispatchSlabs,
@@ -1698,6 +1705,7 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
     month, board, me: board.find((r) => r.id === req.user.id) || { toClient: 0, toUnit: 0, incentive: 0, clientIncentive: 0, unitBonus: 0 },
     unitDispatchSlabs: asmSettings().unitDispatchSlabs,
+    bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));

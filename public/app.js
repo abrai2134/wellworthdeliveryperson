@@ -1926,7 +1926,8 @@ async function adminAssembly(main) {
       <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
       <h3 style="margin-top:18px">🚚 Dispatch incentive per model</h3><div class="muted small">Paid to the dispatch person (Dispatch login) for each machine sent to a <b>client</b>. Machines sent to other units count for the monthly bonus below. Models not listed use the default dispatch amount above.</div>
       <div id="dinc-rows"></div><div class="row"><button type="button" class="link" id="dinc-add">+ Add model</button><button type="button" class="link" id="dinc-all">⧉ Add all assembly models at one rate</button></div>
-      <h3 style="margin-top:18px">🔁 Monthly bonus for dispatch to other units</h3><div class="muted small">Paid once a month to the dispatch person, by how many machines they sent to other units that month. Not shown to team leaders or units.</div>
+      <h3 style="margin-top:18px">🔁 Monthly bonus for godown transfer</h3><div class="muted small">Paid once a month to the dispatch person, by how many machines they sent to the unit(s) ticked below that month. Transfers to other units do not count. Not shown to team leaders or units.</div>
+      <label>Bonus only for transfers to</label><div class="row">${A().units.filter((u) => u.active).map((u) => `<label class="check"><input type="checkbox" class="uds-unit" value="${esc(u.id)}" ${(r.bonusUnits || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div>
       <div class="table-wrap"><table id="uds-rows"><thead><tr><th>From machine no.</th><th>Bonus ₹ for the month</th></tr></thead><tbody>${(s.unitDispatchSlabs || []).concat([{ from: '', amount: '' }]).map((x, i, all) => `<tr><td><input class="uds-f" type="number" min="1" value="${esc(x.from)}" placeholder="e.g. 41"></td><td><input class="uds-a" type="number" min="0" value="${esc(x.amount)}"></td></tr><tr><td colspan="2" class="small muted" style="padding-top:0">${x.from !== '' ? `${x.from}${all[i + 1] && all[i + 1].from !== '' ? `–${all[i + 1].from - 1}` : '+'} machines → ₹${x.amount}` : 'add a new slab (leave empty if not needed)'}</td></tr>`).join('')}</tbody></table></div>
       <datalist id="asm-models2">${(await loadMachineList()).map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
       <div style="margin-top:12px"><button class="primary">Save settings</button></div></form>`;
@@ -2015,6 +2016,7 @@ async function adminAssembly(main) {
   form.onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(form));
+    body.unitDispatchUnits = [...document.querySelectorAll('.uds-unit:checked')].map((c) => c.value);
     body.unitDispatchSlabs = [...document.querySelectorAll('#uds-rows tbody tr')].filter((tr) => tr.querySelector('.uds-f')).map((tr) => ({ from: tr.querySelector('.uds-f').value, amount: tr.querySelector('.uds-a').value })).filter((x) => String(x.from).trim() !== '');
     body.dispatchIncentives = [...drows.querySelectorAll('.dinc-row')].map((el) => ({ model: el.querySelector('.dr-m').value, amount: el.querySelector('.dr-a').value })).filter((x) => x.model.trim());
     body.incentives = [...rows.querySelectorAll('.inc-row')].map((el) => ({ model: el.querySelector('.ir-m').value, leader: el.querySelector('.ir-l').value, installer: el.querySelector('.ir-i').value })).filter((x) => x.model.trim());
@@ -2142,14 +2144,14 @@ function bindSend(root, url, units, reload) {
 }
 
 // "Send 3 more to other units this month for ₹350" – shown only in the Dispatch login.
-function udsNext(slabs, count) {
+function udsNext(slabs, count, where) {
   const next = (slabs || []).slice().sort((a, b) => a.from - b.from).find((s) => s.from > count);
-  return next ? `<div class="line small">🔁 Send ${next.from - count} more to other units this month for a ₹${next.amount} bonus</div>` : '';
+  return next ? `<div class="line small">🔁 Send ${next.from - count} more to ${esc(where || 'the bonus unit')} this month for a ₹${next.amount} bonus</div>` : '';
 }
 function dispatchBoardHtml(board, month, picker) {
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Dispatch scoreboard</h2><div class="spacer"></div>${picker ? `<input type="month" id="dsp-month" value="${esc(month)}" style="width:auto">` : `<span class="badge">${esc(month)}</span>`}</div>
     ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">To other units</th><th class="num">Client incentive</th><th class="num">Unit bonus</th><th class="num">Total</th></tr></thead><tbody>
-    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}</td><td class="num">₹${x.clientIncentive ?? x.incentive}</td><td class="num">${x.unitBonus ? `₹${x.unitBonus}` : '—'}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
+    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}${x.toBonusUnit !== undefined && x.toBonusUnit !== x.toUnit ? `<div class="small muted">${x.toBonusUnit} for bonus</div>` : ''}</td><td class="num">₹${x.clientIncentive ?? x.incentive}</td><td class="num">${x.unitBonus ? `₹${x.unitBonus}` : '—'}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
 }
 
 // Old stock already in a unit's godown, entered before dispatching it.
@@ -2183,8 +2185,8 @@ async function renderDispatch() {
   const wrap = $app.querySelector('.wrap');
   wrap.innerHTML = `<div class="hero"><div class="label">🏆 My dispatch · ${esc(r.month)}</div>
       <div class="big">₹${r.me.incentive} incentive</div>
-      <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients (₹${r.me.clientIncentive || 0}) · ${r.me.toUnit} sent to other units (bonus ₹${r.me.unitBonus || 0})</div>
-      ${udsNext(r.unitDispatchSlabs, r.me.toUnit)}</div>
+      <div class="line">${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients (₹${r.me.clientIncentive || 0}) · ${r.me.toUnit} sent to other units, ${r.me.toBonusUnit || 0} of them to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')} (bonus ₹${r.me.unitBonus || 0})</div>
+      ${udsNext(r.unitDispatchSlabs, r.me.toBonusUnit || 0, (r.bonusUnitNames || []).join(' / '))}</div>
     <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true)}${historyHtml(r.history)}`;
   document.getElementById('add-stock').onclick = () => oldStockForm('/dispatch/stock', r.units, renderDispatch);
