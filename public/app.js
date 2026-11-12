@@ -2144,10 +2144,12 @@ function bindSend(root, url, units, reload) {
 }
 
 function dispatchBoardHtml(board, month, picker) {
-  const admin = board.some((x) => x.unitBonus !== undefined); // transfer bonus: admin only
+  const bonusTo = (x) => (x.toBonusUnit !== undefined && x.toBonusUnit !== x.toUnit ? `<div class="small muted">${x.toBonusUnit} to bonus unit</div>` : '');
+  const sum = (k) => board.reduce((t, x) => t + (x[k] || 0), 0);
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Dispatch scoreboard</h2><div class="spacer"></div>${picker ? `<input type="month" id="dsp-month" value="${esc(month)}" style="width:auto">` : `<span class="badge">${esc(month)}</span>`}</div>
-    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">To other units</th>${admin ? '<th class="num">Client incentive</th><th class="num">Transfer bonus</th><th class="num">Total</th>' : '<th class="num">Incentive</th>'}</tr></thead><tbody>
-    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num"><b>${x.toClient}</b></td><td class="num">${x.toUnit}${x.toBonusUnit !== undefined && x.toBonusUnit !== x.toUnit ? `<div class="small muted">${x.toBonusUnit} for bonus</div>` : ''}</td>${admin ? `<td class="num">₹${x.clientIncentive}</td><td class="num">${x.unitBonus ? `₹${x.unitBonus}` : '—'}</td>` : ''}<td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
+    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">Client incentive</th><th class="num">To other units</th><th class="num">Other unit incentive</th><th class="num">Total incentive</th></tr></thead><tbody>
+    ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num">${x.toClient}</td><td class="num">₹${x.clientIncentive || 0}</td><td class="num">${x.toUnit}${bonusTo(x)}</td><td class="num">₹${x.unitBonus || 0}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}
+    <tr><td></td><td><b>Total</b></td><td class="num"><b>${sum('toClient')}</b></td><td class="num"><b>₹${sum('clientIncentive')}</b></td><td class="num"><b>${sum('toUnit')}</b></td><td class="num"><b>₹${sum('unitBonus')}</b></td><td class="num"><b>₹${sum('incentive')}</b></td></tr></tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
 }
 
 // Old stock already in a unit's godown, entered before dispatching it.

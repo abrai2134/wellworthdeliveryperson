@@ -1700,11 +1700,10 @@ function godownHistory(days = 30) {
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const month = monthOf(req.query.month);
-  // Each dispatch person sees their own godown transfer bonus (to the bonus unit, e.g. ShilphataL1L2);
-  // the slab rates and other people's bonus stay with the admin.
-  const full = ASM.dispatchBoard(db(), month);
-  const mine = full.find((r) => r.id === req.user.id);
-  const board = full.map(hideTransferBonus);
+  // Dispatch logins see the scoreboard with client incentive and other-unit (transfer) incentive;
+  // only the slab rates stay with the admin.
+  const board = ASM.dispatchBoard(db(), month);
+  const mine = board.find((r) => r.id === req.user.id);
   res.json({
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
     month, board,
@@ -1715,13 +1714,10 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
 // Dispatch money is for the admin and dispatch logins only (not team leaders / units).
-function hideTransferBonus(r) {
-  return { id: r.id, name: r.name, toClient: r.toClient, toUnit: r.toUnit, incentive: r.clientIncentive };
-}
 app.get('/api/dispatch/board', (req, res) => {
   if (!req.user || !['admin', 'dispatch'].includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
   const board = ASM.dispatchBoard(db(), monthOf(req.query.month));
-  res.json({ board: req.user.role === 'admin' ? board : board.map(hideTransferBonus) });
+  res.json({ board });
 });
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
