@@ -1832,7 +1832,8 @@ app.post('/api/godown/edit-model', (req, res) => {
   // only the login that made the entry (or the admin) can correct it
   // "Which ones": one group of the line (e.g. assembled by a team leader, or old stock by a unit)
   const entry = str(req.body.entry, 300);
-  const group = entry ? inGodown.filter((m) => ASM.stockEntry(db(), m) === entry) : inGodown;
+  const entryAt = str(req.body.entryAt, 40);
+  const group = entry ? inGodown.filter((m) => ASM.stockEntry(db(), m) === entry && (!entryAt || ASM.stockEntryAt(m) === entryAt)) : inGodown;
   if (!group.length) return bad(res, 'Those machines are no longer in this godown – refresh the page');
   const list = group.filter((m) => ASM.canEditModel(db(), req.user, m));
   if (!list.length) return bad(res, 'Only the login that made this entry (or the admin) can correct the model no.');
