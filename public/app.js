@@ -1476,6 +1476,8 @@ function asmCard(m, who, me) {
   if (canWork && mine && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
   if (who === 'admin' && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
+  if (who === 'admin' && m.status === 'started') btns.push(`<button class="small" data-asm-undo="${esc(m.id)}" title="Start was pressed by mistake">↩ Not started</button>`);
+  if (who === 'admin' && m.status === 'done' && m.location === 'godown' && !(m.transfers || []).length) btns.push(`<button class="small" data-asm-undo="${esc(m.id)}" title="Assembled was pressed by mistake">↩ Not assembled</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
   return `<div class="card unit-card${m.status === 'done' ? ' done' : ''}">
     <div class="row"><div class="name">⚙️ ${esc(m.model)}</div><div class="spacer"></div><span class="badge ${cls}">${label}</span></div>
@@ -1669,6 +1671,12 @@ function bindAsm(root, base, items, reload) {
     });
     const getPhotos = photoPicker(document.getElementById('a-photos'));
     bindLocation();
+  }));
+  root.querySelectorAll('[data-asm-undo]').forEach((b) => (b.onclick = async () => {
+    const m = find(b.dataset.asmUndo);
+    const q = m.status === 'started' ? `Put ${m.model} back to NOT STARTED? (Start was pressed by mistake)` : `Put ${m.model} back to ASSEMBLING? Its end time, godown entry and incentive are removed.`;
+    if (!confirm(q)) return;
+    try { await api(`/admin/assembly/${m.id}/undo`, { method: 'POST' }); toast('Corrected'); reload(); } catch (ex) { toast(ex.message, true); }
   }));
   root.querySelectorAll('[data-asm-crew]').forEach((b) => (b.onclick = async () => {
     const m = find(b.dataset.asmCrew);

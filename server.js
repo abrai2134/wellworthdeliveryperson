@@ -1485,6 +1485,30 @@ admin.get('/assembly', (req, res) => {
 });
 admin.post('/assembly', (req, res) => send(res, addMachines(str(req.body.unitId), req.body, 'admin')));
 admin.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmStart(m, 'admin')); });
+// Admin corrects a wrong status: "Start" pressed by mistake -> back to not started;
+// "Assembled" by mistake (machine still in the godown) -> back to assembling.
+admin.post('/assembly/:id/undo', (req, res) => {
+  const m = asmFind(req, res);
+  if (!m) return;
+  const at = new Date().toISOString();
+  if (m.status === 'started') {
+    (m.statusEdits = m.statusEdits || []).push({ from: 'started', to: 'assigned', by: 'admin', at, startedAt: m.startedAt });
+    m.status = 'assigned';
+    m.startedAt = null;
+    m.startedBy = null;
+  } else if (m.status === 'done') {
+    if (m.location !== 'godown' || (m.transfers || []).length) return bad(res, 'Only a machine still in its own godown (not sent anywhere) can go back to assembling');
+    (m.statusEdits = m.statusEdits || []).push({ from: 'done', to: 'started', by: 'admin', at, completedAt: m.completedAt });
+    m.status = 'started';
+    m.completedAt = null;
+    m.location = null;
+    m.godownAt = null;
+    m.incentive = null;
+  } else return bad(res, 'Nothing to undo on this machine');
+  asmAssign();
+  store.save();
+  res.json({ ok: true });
+});
 admin.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmEditModel(m, req.body, 'admin', (x) => x.unitId === m.unitId)); });
 admin.post('/assembly/:id/dispatch', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmDispatch(m, req.body, 'admin')); });
 admin.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res); if (m) send(res, asmComplete(m, req.body, 'admin')); });
