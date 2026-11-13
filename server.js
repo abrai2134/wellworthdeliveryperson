@@ -1121,7 +1121,7 @@ function asmView(m) {
     transfers: (m.transfers || []).map((x) => ({ from: unitName(x.from), to: unitName(x.to), at: x.at, by: x.by })),
     bookedParty: m.bookedParty || '',
     dispatchPhotos: (m.dispatchPhotos || []).map((p) => ({ url: '/api/photos/' + p.file, at: p.at, kind: p.kind })),
-    diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '', amount: x.amount || 0 })),
+    diverts: (m.diverts || []).map((x) => ({ from: personName(x.from), to: personName(x.to), at: x.at, reason: x.reason || '' })),
   };
 }
 const asmSettings = () => ASM.settings(db());
@@ -1289,7 +1289,11 @@ const monthOf = (q) => (/^\d{4}-\d{2}$/.test(String(q || '')) ? q : today().slic
 // Scoreboard: every login can see it, so people can compare.
 app.get('/api/assembly/board', (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Please log in' });
-  res.json(ASM.board(db(), monthOf(req.query.month)));
+  const b = ASM.board(db(), monthOf(req.query.month));
+  // Divert deductions are known only to the admin: everyone else sees the incentive already
+  // reduced, with no deduction amount or count.
+  if (req.user.role !== 'admin') b.leaders = b.leaders.map(({ deduction, diverted, ...r }) => ({ ...r, incentive: r.incentive - (deduction || 0) }));
+  res.json(b);
 });
 
 // Unit
@@ -1461,7 +1465,9 @@ app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
 admin.get('/assembly', (req, res) => {
   const from = isValid(req.query.from) ? req.query.from : addDays(today(), -30);
   res.json({
-    items: asmList((m) => m.status !== 'cancelled' && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from)),
+    // admin only: the divert deduction amounts
+    items: asmList((m) => m.status !== 'cancelled' && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from))
+      .map((v) => { const m = db().assembly.find((x) => x.id === v.id); return { ...v, diverts: v.diverts.map((d, i) => ({ ...d, amount: ((m.diverts || [])[i] || {}).amount || 0 })) }; }),
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
       .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
     settings: asmSettings(),

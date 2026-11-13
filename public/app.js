@@ -1592,13 +1592,14 @@ function asmList(items, who, me) {
 
 async function asmBoardHtml(month, maxPending) {
   const b = await api('/assembly/board?month=' + month);
+  const admin = state.me && state.me.role === 'admin'; // deduction columns: admin only
   const lead = b.leaders.map((r, i) => `<tr><td>${i < 3 && r.done ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.unitName)}</div></td>
       <td class="num"><b>${r.done}</b></td><td class="num">${r.pending >= (maxPending || 6) ? `<span class="badge bad">${r.pending} – full</span>` : r.pending}${r.oldestPending ? `<div class="small muted">oldest ${esc(ageText(r.oldestPending))}</div>` : ''}</td>
-      <td class="num">${r.avgMinutes == null ? '—' : esc(fmtDur(r.avgMinutes * 60000))}</td><td class="num">₹${r.incentive}</td><td class="num">${r.deduction ? `<span class="empty">−₹${r.deduction}</span><div class="small muted">${r.diverted} diverted</div>` : '—'}</td><td class="num"><b>₹${r.incentive - (r.deduction || 0)}</b></td><td class="num muted">${r.allTime}</td></tr>`).join('');
+      <td class="num">${r.avgMinutes == null ? '—' : esc(fmtDur(r.avgMinutes * 60000))}</td>${admin ? `<td class="num">₹${r.incentive}</td><td class="num">${r.deduction ? `<span class="empty">−₹${r.deduction}</span><div class="small muted">${r.diverted} diverted</div>` : '—'}</td><td class="num"><b>₹${r.incentive - (r.deduction || 0)}</b></td>` : `<td class="num"><b>₹${r.incentive}</b></td>`}<td class="num muted">${r.allTime}</td></tr>`).join('');
   const inst = b.installers.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td class="num">${r.done}</td><td class="num"><b>₹${r.incentive}</b></td></tr>`).join('');
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Assembly scoreboard</h2><div class="spacer"></div><input type="month" id="asm-month" value="${esc(month)}" style="width:auto"></div>
     <div class="small muted">${b.totalDone} machine(s) assembled in this month${b.waiting ? ` · <span class="badge warn">${b.waiting} waiting for a free team leader</span>` : ''}. Pending = given but not assembled yet (team leaders with ${maxPending || 6} pending get no new machine).</div>
-    ${lead ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Team leader</th><th class="num">Assembled</th><th class="num">Pending</th><th class="num">Avg time</th><th class="num">Incentive</th><th class="num">Deduction</th><th class="num">Net</th><th class="num">All time</th></tr></thead><tbody>${lead}</tbody></table></div>` : '<p class="muted">No team leaders yet.</p>'}
+    ${lead ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Team leader</th><th class="num">Assembled</th><th class="num">Pending</th><th class="num">Avg time</th>${admin ? '<th class="num">Incentive</th><th class="num">Deduction</th><th class="num">Net</th>' : '<th class="num">Incentive</th>'}<th class="num">All time</th></tr></thead><tbody>${lead}</tbody></table></div>` : '<p class="muted">No team leaders yet.</p>'}
     ${inst ? `<h3 style="margin-top:12px">Installation persons</h3><div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Assembled</th><th class="num">Incentive</th></tr></thead><tbody>${inst}</tbody></table></div>` : ''}</div>`;
 }
 
