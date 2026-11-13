@@ -2095,7 +2095,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${m.oldStock ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${m.oldStock}" title="Correct the model no. of old stock">✎ Model</button>` : ''}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = state.me && state.me.role !== 'unit' ? m.qty : m.oldStock; return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
@@ -2105,7 +2105,7 @@ document.addEventListener('click', async (e) => {
   if (!b) return;
   const [unitId, from, n] = b.dataset.stockEdit.split('|');
   const models = await loadMachineList();
-  openModal(`<h2>✎ Correct model no.</h2><div class="muted small">Old stock entered as <b>${esc(from)}</b> (${n} machine${n === '1' ? '' : 's'}).</div>
+  openModal(`<h2>✎ Correct model no.</h2><div class="muted small">In the godown as <b>${esc(from)}</b> (${n} machine${n === '1' ? '' : 's'}).</div>
     <label>Correct model no. *</label><input name="model" list="asm-models-gs" required placeholder="type and pick from the list">
     <datalist id="asm-models-gs">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
     <label>How many to change</label><input name="qty" type="number" min="1" max="${esc(n)}" value="${esc(n)}">

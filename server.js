@@ -1758,8 +1758,8 @@ function addOldStock(body, by, role) {
   return { value: { id: '', count: qty } };
 }
 app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
-// Correct the model no. of old stock in a godown (typing mistakes). Admin and Dispatch logins for
-// any unit, a unit for its own godown. Only machines entered as old stock can be changed here.
+// Correct the model no. of machines in a godown (typing mistakes). Admin and Dispatch logins: any
+// machine in any godown; a unit: only old stock in its own godown.
 app.post('/api/godown/edit-model', (req, res) => {
   const role = req.user && req.user.role;
   if (!['admin', 'dispatch', 'unit'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
@@ -1769,12 +1769,17 @@ app.post('/api/godown/edit-model', (req, res) => {
   if (!model) return bad(res, 'Enter the correct model no.');
   if (model === from) return bad(res, 'The model no. is the same');
   { const miss = rateMissing(model); if (miss) return bad(res, miss); }
-  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.source === 'stock' && m.status === 'done' && m.location === 'godown');
-  if (!list.length) return bad(res, 'No old stock of this model in that godown');
+  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown' && (role !== 'unit' || m.source === 'stock'))
+    .sort((a, b) => Number(b.source === 'stock') - Number(a.source === 'stock')); // old stock first
+  if (!list.length) return bad(res, role === 'unit' ? 'No old stock of this model in your godown' : 'No machine of this model in that godown');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
   const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name;
   const at = new Date().toISOString();
-  for (const m of list.slice(0, qty)) { (m.modelEdits = m.modelEdits || []).push({ from, to: model, by, at }); m.model = model; }
+  for (const m of list.slice(0, qty)) {
+    (m.modelEdits = m.modelEdits || []).push({ from, to: model, by, at });
+    m.model = model;
+    if (m.source !== 'stock') m.incentive = ASM.incentiveFor(db(), model); // assembly incentive follows the right model
+  }
   store.save();
   res.json({ ok: true, changed: qty });
 });
