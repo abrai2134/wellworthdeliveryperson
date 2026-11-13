@@ -2126,7 +2126,7 @@ document.addEventListener('click', async (e) => {
   openModal(`<h2>✎ Correct entry</h2><div class="muted small">In the godown as <b>${esc(from)}</b> (${n} machine${n === '1' ? '' : 's'}).</div>
     ${whichHtml}
     <label>What is wrong? *</label>
-    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="remove"> ➖ Too many entered (old stock) – remove extra</label></div>
+    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="remove"> ➖ ${state.me && state.me.role === 'admin' ? 'Entered by mistake – remove from godown' : 'Too many entered (old stock) – remove extra'}</label></div>
     <div id="ce-model"><label>Correct model no. *</label><input name="model" list="asm-models-gs" placeholder="type and pick from the list"></div>
     <div id="ce-remove" hidden><label>Why? *</label><input name="reason" placeholder="e.g. entered 4, only 3 in godown"></div>
     <datalist id="asm-models-gs">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>

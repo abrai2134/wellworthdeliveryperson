@@ -1867,7 +1867,8 @@ app.post('/api/godown/edit-model', (req, res) => {
   res.json({ ok: true, changed: qty });
 });
 // Old stock entered by mistake (e.g. 4 entered, only 3 there): take the extra ones out of the godown.
-// Old stock only; the admin or the login that made the entry. Kept on record as cancelled.
+// Old stock: the admin or the login that made the entry; assembled / transferred machines: admin only.
+// Kept on record as cancelled (an assembled machine then counts no incentive).
 app.post('/api/godown/remove', (req, res) => {
   const role = req.user && req.user.role;
   if (!['admin', 'dispatch', 'unit', 'staff'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
@@ -1879,8 +1880,8 @@ app.post('/api/godown/remove', (req, res) => {
   if (!reason) return bad(res, 'Write why they are removed (e.g. entered 4, only 3 in godown)');
   const group = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown'
     && (!entry || (ASM.stockEntry(db(), m) === entry && (!entryAt || ASM.stockEntryAt(m) === entryAt))));
-  const stockOnly = group.filter((m) => m.source === 'stock');
-  if (!stockOnly.length) return bad(res, 'Only old stock entries can be removed here (assembled machines: ask the admin)');
+  const stockOnly = role === 'admin' ? group : group.filter((m) => m.source === 'stock');
+  if (!stockOnly.length) return bad(res, group.length ? 'Only old stock entries can be removed here (assembled machines: ask the admin)' : 'Those machines are no longer in this godown – refresh the page');
   const list = stockOnly.filter((m) => ASM.canEditModel(db(), req.user, m)).sort((a, b) => Number(!!a.bookedParty) - Number(!!b.bookedParty)); // unbooked first
   if (!list.length) return bad(res, 'Only the login that made this entry (or the admin) can remove it');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
