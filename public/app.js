@@ -1473,7 +1473,7 @@ function asmCard(m, who, me) {
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
   // only the login that made the entry (or the admin) may correct the model no.
   const mine = who === 'admin' || (m.creator && state.me && m.creator.role === state.me.role && m.creator.id === state.me.id);
-  if (canWork && mine && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
+  if (mine && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
   if (who === 'admin' && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
   if (who === 'admin' && m.status === 'started') btns.push(`<button class="small" data-asm-undo="${esc(m.id)}" title="Start was pressed by mistake">↩ Not started</button>`);
@@ -1755,17 +1755,18 @@ function bindAsm(root, base, items, reload) {
 // Add machines that came for assembly (unit / admin).
 async function asmAddForm(base, reload) {
   const isAdmin = base === '/admin';
-  const [models, makers] = await Promise.all([loadMachineList(), loadMakers()]);
+  const isLeader = base === '/staff'; // the leader's own login is the entry
+  const [models, makers] = await Promise.all([loadMachineList(), isLeader ? [] : loadMakers()]);
   openModal(`<h2>Machines for assembly</h2>
     ${isAdmin ? `<label>Unit *</label><select name="unitId" required>${A().units.filter((u) => u.active).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>` : ''}
-    <label>✍️ Entry by *</label>${makers.length ? `<select name="entryBy" required><option value="">— choose your name —</option>${makers.map((n) => `<option>${esc(n)}</option>`).join('')}</select>` : '<input name="entryBy" required placeholder="your name">'}
+    ${isLeader ? `<div class="small muted">✍️ Entry by: <b>${esc(state.me.name)}</b> (your login)</div>` : `<label>✍️ Entry by *</label>${makers.length ? `<select name="entryBy" required><option value="">— choose your name —</option>${makers.map((n) => `<option>${esc(n)}</option>`).join('')}</select>` : '<input name="entryBy" required placeholder="your name">'}`}
     <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models" required placeholder="Model no."></div>
       <div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
     <datalist id="asm-models">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
     <label>Note</label><input name="note" placeholder="optional">
     <p class="muted small">Each machine goes to the team leader whose team has the fewest machines open (with 1 installation person + 1 helper). A team leader with too many pending gets none – the machine waits for the next free leader.</p>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
-  async (fd) => { await api(`${base}/assembly`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
+  async (fd) => { await api(isLeader ? '/staff/assembly/machines' : `${base}/assembly`, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
 }
 
 // ----- unit: Jobs | Assembly switch -----
@@ -1782,14 +1783,12 @@ async function renderUnitAssembly() {
   wrap.innerHTML = `${unitSwitchHtml('assembly')}
     <div class="row section"><div><h1 style="margin:0">🛠️ Assembly</h1>
       <div class="small muted">Team leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending${l.pending >= r.maxPending ? ' – full' : ''})`).join(' · ') || 'none – ask the admin to add team leaders'}</div></div>
-      <div class="spacer"></div><button id="add-stock">📦 Add stock</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
+      <div class="spacer"></div><span class="small muted">New machines and stock are entered by team leaders from their own login.</span></div>
     ${asmList(r.items, 'unit')}
     <div id="u-godown"></div>
     <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
   api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + ((g.toFix || []).length ? godownHtml(g.toFix, false, '⚠ Our entries to correct (now in other godowns)') : '') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
   bindUnitSwitch();
-  document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
-  document.getElementById('add-stock').onclick = () => oldStockForm('/unit/assembly/old-stock', [{ id: state.me.id, name: state.me.name }], renderUnit, true);
   bindAsm(wrap, '/unit/assembly', r.items, renderUnit);
   await drawBoard(month, r.maxPending, renderUnit);
 }
@@ -1807,12 +1806,17 @@ async function staffAssemblyHtml(wrap) {
   const box = document.createElement('div');
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
       ${r.myMonth && r.myMonth.machines ? `<span class="badge ok">🏆 This month: ${r.myMonth.machines} machine${r.myMonth.machines > 1 ? 's' : ''} · ₹${r.myMonth.incentive}</span>` : ''}
-      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button> <button class="small" id="asm-rates">💰 Incentive rates</button>` : ''}</div>
+      ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-new-l">+ Machines for assembly</button> <button class="small" id="asm-stock-l">📦 Add stock</button> <button class="small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button> <button class="small" id="asm-rates">💰 Incentive rates</button>` : ''}</div>
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
     ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">${q.type === 'old' ? '📁 Old machine: ' : '⚙️ '}${esc(q.model)} × ${q.qty}${q.type === 'old' ? ` (${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))})` : ''} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
+    ${r.isLeader ? godownHtml(r.stock || [], false, `🏬 ${esc(r.unitName || 'Our')} godown stock`) + ((r.toFix || []).length ? godownHtml(r.toFix, false, '⚠ My entries to correct (now in other godowns)') : '') : ''}
     <div id="asm-board"></div>`;
   wrap.appendChild(box);
   bindAsm(box, '/staff/assembly', r.items, renderStaff);
+  const newBtn = document.getElementById('asm-new-l');
+  if (newBtn) newBtn.onclick = () => asmAddForm('/staff', renderStaff);
+  const stockBtn = document.getElementById('asm-stock-l');
+  if (stockBtn) stockBtn.onclick = () => oldStockForm('/staff/assembly/stock', [{ id: r.unitId, name: r.unitName }], renderStaff, true);
   const ratesBtn = document.getElementById('asm-rates');
   if (ratesBtn) ratesBtn.onclick = async () => {
     const [rt, models] = await Promise.all([api('/staff/assembly/incentives'), loadMachineList()]);

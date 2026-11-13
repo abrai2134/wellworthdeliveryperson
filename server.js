@@ -1170,18 +1170,19 @@ function readEntry(body) {
   }
   return { value: entryBy };
 }
-function addMachines(unitId, body, by) {
+function addMachines(unitId, body, by, creator) {
   if (!liveUnit(unitId)) return { error: 'Choose a unit' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   { const miss = rateMissing(model); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
-  const e = readEntry(body);
+  // a team leader's own login is the entry (no "Entry by" list needed)
+  const e = creator && creator.role === 'staff' ? { value: by } : readEntry(body);
   if (e.error) return e;
   const now = new Date().toISOString();
   for (let i = 0; i < qty; i++) {
-    db().assembly.push({ id: newId('asm'), unitId, model, status: 'waiting', source: 'new', createdAt: now, createdBy: by, creator: by === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'unit', id: unitId }, entryBy: e.value, note: str(body.note, 200) });
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'waiting', source: 'new', createdAt: now, createdBy: by, creator: creator || (by === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'unit', id: unitId }), entryBy: e.value, note: str(body.note, 200) });
   }
   asmAssign();
   store.save();
@@ -1306,7 +1307,8 @@ unit.get('/assembly', (req, res) => {
     maxPending: asmSettings().maxPending,
   });
 });
-unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
+// New machines and old stock are entered from the team leader's own login (so every entry has a name).
+unit.post('/assembly', (req, res) => bad(res, 'New machines are entered by a team leader from their own login'));
 unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
 unit.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmEditModel(m, req.body, 'unit', (x) => x.unitId === req.user.id, req.user)); });
 unit.post('/assembly/:id/dispatch', (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
@@ -1322,7 +1324,12 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
   const p = req.user.account;
   res.json({
     isLeader: p.role === 'leader',
-    items: asmList((m) => m.status !== 'cancelled' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id) && recentDone(m)),
+    // own machines, plus machines this leader entered (so a wrong entry can be corrected)
+    items: asmList((m) => m.status !== 'cancelled' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id && m.status !== 'done')) && recentDone(m)),
+    unitId: p.unitId,
+    unitName: unitName(p.unitId),
+    stock: p.role === 'leader' ? ASM.stock(db(), p.unitId) : [],
+    toFix: p.role === 'leader' ? ASM.stock(db(), null, (m) => m.unitId !== p.unitId && !ASM.hasRate(db(), m.model) && ASM.canEditModel(db(), req.user, m)) : [],
     requests: db().assemblyRequests.filter((r) => r.leaderId === p.id).slice(-20).reverse(),
     // For "Add old machine": installation persons and helpers of the leader's unit.
     crew: p.role === 'leader'
@@ -1346,6 +1353,17 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
   });
 });
 const myMachine = (req) => (m) => m.leaderId === req.user.id;
+// Team leader enters new machines for assembly and old stock for their unit's godown.
+app.post('/api/staff/assembly/machines', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can enter machines');
+  send(res, addMachines(p.unitId, req.body, p.name, { role: 'staff', id: p.id }));
+});
+app.post('/api/staff/assembly/stock', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can add stock');
+  send(res, addOldStock({ ...req.body, unitId: p.unitId, kind: 'godown', party: '' }, p.name, 'staff', { role: 'staff', id: p.id }));
+});
 app.post('/api/staff/assembly/:id/start', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmStart(m, req.user.account.name)); });
 // Team leader changes the installation person / helper on their own open machines.
 app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
@@ -1372,7 +1390,7 @@ app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
   res.json({ ok: true, count: list.length });
 });
 
-app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id, req.user)); });
+app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, (x) => x.leaderId === req.user.id || ASM.canEditModel(db(), req.user, x)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id, req.user)); });
 app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
 // Team leader passes a machine to another team leader of the unit; ₹ per machine is
@@ -1795,7 +1813,7 @@ admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { na
 
 // Old stock already lying in a unit's godown (before this app): added straight to the godown,
 // no team / assembly incentive; the dispatch incentive applies when it goes to a client.
-function addOldStock(body, by, role) {
+function addOldStock(body, by, role, creator) {
   const unitId = str(body.unitId);
   if (!liveUnit(unitId)) return { error: 'Choose the unit' };
   const model = canonModel(body.model);
@@ -1810,7 +1828,7 @@ function addOldStock(body, by, role) {
   if (kind === 'party' && !party) return { error: 'Client (party) name is compulsory' };
   const at = new Date().toISOString();
   for (let i = 0; i < qty; i++) {
-    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, createdRole: role, entryBy: `${by} (old stock)`, note: str(body.note, 200), ...(party ? { bookedParty: party } : {}) });
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, createdRole: role, ...(creator ? { creator } : {}), entryBy: `${by} (old stock)`, note: str(body.note, 200), ...(party ? { bookedParty: party } : {}) });
   }
   store.save();
   return { value: { id: '', count: qty } };
@@ -1850,7 +1868,7 @@ app.post('/api/godown/edit-model', (req, res) => {
 });
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
-unit.post('/assembly/old-stock', (req, res) => send(res, addOldStock({ ...req.body, unitId: req.user.id, kind: 'godown', party: '' }, (req.user.account.name || req.user.account.username) + ' (unit)', 'unit')));
+unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the Dispatch login)'));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
