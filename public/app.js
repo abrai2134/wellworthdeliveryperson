@@ -2094,7 +2094,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${(() => { const n = state.me && state.me.role !== 'unit' ? m.qty : m.oldStock; return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = state.me && state.me.role !== 'unit' ? m.qty : m.oldStock; return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
@@ -2119,7 +2119,7 @@ document.addEventListener('click', async (e) => {
 function historyHtml(history) {
   if (!history || !history.length) return '';
   return `<div class="card section"><h2>Recent dispatches (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th>Photo</th><th class="num">Dispatch incentive</th></tr></thead><tbody>
-    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}</td><td class="small">${esc(h.by)}</td><td>${h.photo ? `<a href="/api/photos/${esc(h.photo)}" target="_blank" rel="noopener"><img src="/api/photos/${esc(h.photo)}" alt="dispatch photo" style="width:44px;height:44px;object-fit:cover;border-radius:6px"></a>` : '<span class="muted small">—</span>'}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
+    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}${h.booked ? `<div class="small"><span class="badge warn">👤 booked: ${esc(h.booked)}</span></div>` : ''}</td><td class="small">${esc(h.by)}</td><td>${h.photo ? `<a href="/api/photos/${esc(h.photo)}" target="_blank" rel="noopener"><img src="/api/photos/${esc(h.photo)}" alt="dispatch photo" style="width:44px;height:44px;object-fit:cover;border-radius:6px"></a>` : '<span class="muted small">—</span>'}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 
@@ -2128,14 +2128,23 @@ function bindSend(root, url, units, reload) {
   root.querySelectorAll('[data-send]').forEach((b) => (b.onclick = () => {
     const [unitId, model, max] = b.dataset.send.split('|');
     const from = units.find((u) => u.id === unitId) || { name: '' };
+    let booked = [];
+    try { booked = JSON.parse(b.dataset.booked || '[]'); } catch { booked = []; }
+    const free = Number(max) - booked.reduce((n, x) => n + x.qty, 0);
+    // Some machines of this model are booked: ask which ones are going (the booking moves with them).
+    const pickHtml = booked.length ? `<label>Which machines? *</label><div class="pick-list">
+        ${free > 0 ? `<label class="check"><input type="radio" name="pick" value="free"> 🏬 Free stock (not booked) – ${free}</label>` : ''}
+        ${booked.map((x) => `<label class="check"><input type="radio" name="pick" value="${esc(x.party)}"> 👤 Booked: <b>${esc(x.party)}</b> – ${x.qty}</label>`).join('')}</div>
+      <div class="small muted">Sending to another unit: the booking goes with the machine to that godown.</div>` : '';
     openModal(`<h2>🚚 Send from godown</h2><div class="muted">${esc(from.name)} · ⚙️ ${esc(model)} · ${max} in godown</div>
+      ${pickHtml}
       <label>Quantity *</label><input name="qty" type="number" min="1" max="${max}" value="1" required>
       <label>Send to *</label>
       <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
       <div id="s-client" class="lookup"><label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
         <div class="small muted">You get the dispatch incentive for each machine sent to a client.</div></div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
-        <div class="small muted">Moves to that unit's godown. No incentive for unit transfers.</div></div>
+        <div class="small muted">Moves to that unit's godown (a booked machine stays booked for its client).</div></div>
       <label>📷 Dispatch photo ${url.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
       <div class="muted small">Photo of the machine loaded in the vehicle / challan.</div>
       <div id="s-photos"></div>
@@ -2143,6 +2152,9 @@ function bindSend(root, url, units, reload) {
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send</button></div>`,
     async (fd) => {
       const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model, photos: getPhotos() };
+      if (booked.length && !body.pick) throw new Error('Choose which machines you are sending: free stock or booked for a client');
+      const groupMax = !body.pick ? Number(max) : body.pick === 'free' ? free : (booked.find((x) => x.party === body.pick) || {}).qty || 0;
+      if (Number(body.qty) > groupMax) throw new Error(`Only ${groupMax} of those in the godown`);
       if (!body.photos.length && !url.startsWith('/admin')) throw new Error('Take a dispatch photo first');
       if (body.to === 'client' && !String(body.party || '').trim()) throw new Error('Client name is compulsory');
       if (body.to === 'unit' && !body.toUnitId) throw new Error('Choose the unit');
@@ -2152,6 +2164,14 @@ function bindSend(root, url, units, reload) {
     });
     clientSearch(document.getElementById('s-party'), document.getElementById('s-party-list'));
     const getPhotos = photoPicker(document.getElementById('s-photos'));
+    // booked machine going to a client: fill in that client's name
+    modalBody.querySelectorAll('[name=pick]').forEach((r) => (r.onchange = () => {
+      const p = modalBody.querySelector('[name=pick]:checked').value;
+      const q = modalBody.querySelector('[name=qty]');
+      const n = p === 'free' ? free : (booked.find((x) => x.party === p) || {}).qty || 1;
+      q.max = n; if (Number(q.value) > n) q.value = n;
+      if (p !== 'free') document.getElementById('s-party').value = p;
+    }));
     modalBody.querySelectorAll('[name=to]').forEach((r) => (r.onchange = () => {
       const c = modalBody.querySelector('[name=to]:checked').value === 'client';
       document.getElementById('s-client').hidden = !c;

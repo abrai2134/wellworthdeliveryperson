@@ -1670,6 +1670,17 @@ function sendFromGodown(body, who) {
     .sort((a, b) => rank(a) - rank(b) || (a.completedAt || a.godownAt || '').localeCompare(b.completedAt || b.godownAt || ''));
   function rank(m) { return !m.bookedParty ? 1 : m.bookedParty.toLowerCase() === forParty ? 0 : 2; }
   if (qty > avail.length) return { error: `Only ${avail.length} in the godown` };
+  // "Which machines": 'free' = not booked, otherwise the client the machines are booked for.
+  // Compulsory when some of this model are booked, so the right machines (and their booking) move.
+  const pick = str(body.pick, 120);
+  const anyBooked = avail.some((m) => m.bookedParty);
+  if (anyBooked && !pick) return { error: 'Choose which machines you are sending: free stock or booked for a client' };
+  if (pick) {
+    const group = avail.filter((m) => (pick === 'free' ? !m.bookedParty : (m.bookedParty || '') === pick));
+    if (!group.length) return { error: 'No such machines in this godown' };
+    if (qty > group.length) return { error: `Only ${group.length} ${pick === 'free' ? 'free (not booked)' : 'booked for ' + pick} in the godown` };
+    avail.splice(0, avail.length, ...group);
+  }
   // check the destination before saving any photo
   if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
   if (to === 'unit' && (!liveUnit(str(body.toUnitId)) || str(body.toUnitId) === fromUnitId)) return { error: 'Choose a different unit to send to' };
@@ -1689,7 +1700,7 @@ function sendFromGodown(body, who) {
     if (!toUnit) return { error: 'Choose the unit to send to' };
     if (toUnit.id === fromUnitId) return { error: 'Choose a different unit' };
     for (const m of list) {
-      (m.transfers = m.transfers || []).push({ from: m.unitId, to: toUnit.id, at, by, dispatcherId: who.dispatcherId || null, note: str(body.note, 200) });
+      (m.transfers = m.transfers || []).push({ from: m.unitId, to: toUnit.id, at, by, dispatcherId: who.dispatcherId || null, note: str(body.note, 200), ...(m.bookedParty ? { bookedParty: m.bookedParty } : {}) });
       m.unitId = toUnit.id;
       m.godownAt = at;
     }
@@ -1715,11 +1726,11 @@ function godownHistory(days = 30) {
   for (const m of db().assembly) {
     const photoAt = (at, kind) => ((m.dispatchPhotos || []).find((p) => p.at === at && p.kind === kind) || (m.dispatchPhotos || []).find((p) => p.kind === kind && Math.abs(Date.parse(p.at) - Date.parse(at)) < 60000) || {}).file;
     if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0, photo: photoAt(m.dispatchedAt, 'client') });
-    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '', photo: photoAt(t.at, 'unit') });
+    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '', booked: t.bookedParty || '', photo: photoAt(t.at, 'unit') });
   }
   // group same moment + model + destination
   const g = {};
-  for (const r of rows) { const k = [r.at, r.kind, r.model, r.from, r.to].join('|'); (g[k] ||= { ...r, qty: 0, incentive: 0 }).qty++; g[k].incentive += r.incentive || 0; }
+  for (const r of rows) { const k = [r.at, r.kind, r.model, r.from, r.to, r.booked || ''].join('|'); (g[k] ||= { ...r, qty: 0, incentive: 0 }).qty++; g[k].incentive += r.incentive || 0; }
   return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100);
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
