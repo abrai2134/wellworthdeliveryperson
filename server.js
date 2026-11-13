@@ -1128,6 +1128,14 @@ const asmSettings = () => ASM.settings(db());
 // Typed model no. -> the name in the machine list, so "FT24BK" is saved as "FT~24BK (DUAL SUCTION POINT)".
 // Exact match (ignoring ~, spaces, case) first; then the model part before the brackets, only if
 // that points to one machine. Otherwise it is kept as typed.
+// Every model no. entered must have an incentive rate (assembly or dispatch list), so a typing
+// mistake like "T15~CH3" for "TP150~CH3" is caught at once.
+function rateMissing(model) {
+  const s = asmSettings();
+  const has = (list) => (list || []).some((x) => ASM.sameModel(x.model, model));
+  if (!model || has(s.incentives) || has(s.dispatchIncentives)) return '';
+  return `No incentive is set for model "${model}". Check the model no. (pick it from the list), or ask the admin / a team leader to add its incentive rate first.`;
+}
 function canonModel(typed) {
   const t = str(typed, 120);
   if (!t) return t;
@@ -1156,6 +1164,7 @@ function addMachines(unitId, body, by) {
   if (!liveUnit(unitId)) return { error: 'Choose a unit' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
+  { const miss = rateMissing(model); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const e = readEntry(body);
@@ -1201,6 +1210,7 @@ function readLocation(body) {
 function asmEditModel(m, body, by, scope) {
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
+  { const miss = rateMissing(model); if (miss) return { error: miss }; }
   if (by !== 'admin' && !['waiting', 'assigned', 'started'].includes(m.status)) return { error: 'Assembled machines can be corrected by the admin only' };
   const old = m.model;
   if (model === old) return { error: 'The model no. is the same' };
@@ -1388,6 +1398,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
   const model = canonModel(req.body.model);
   const qty = parseInt(req.body.qty, 10) || 1;
   if (!model) return bad(res, 'Enter the model no.');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
   if (qty < 1 || qty > 10) return bad(res, 'Quantity must be 1 to 10');
   const completed = req.body.completed !== 'no';
   const crewOk = (id, roles) => !id || db().people.some((x) => x.id === id && !x.deleted && roles.includes(x.role));
@@ -1430,6 +1441,7 @@ app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
   const model = canonModel(req.body.model);
   const qty = parseInt(req.body.qty, 10);
   if (!model) return bad(res, 'Enter the model no.');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
   if (!(qty >= 1 && qty <= 20)) return bad(res, 'Quantity must be 1 to 20');
   db().assemblyRequests.push({ id: newId('req'), leaderId: p.id, unitId: p.unitId, model, qty, note: str(req.body.note, 200), status: 'pending', createdAt: new Date().toISOString() });
   store.save();
@@ -1509,6 +1521,7 @@ admin.post('/assembly/old', (req, res) => {
   if (!liveUnit(unitId)) return bad(res, 'Choose a unit');
   const model = canonModel(req.body.model);
   if (!model) return bad(res, 'Enter the model no.');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
   const qty = parseInt(req.body.qty, 10) || 1;
   if (qty < 1 || qty > 50) return bad(res, 'Quantity must be 1 to 50');
   const leader = db().people.find((p) => p.id === str(req.body.leaderId) && p.role === 'leader' && !p.deleted);
@@ -1729,6 +1742,7 @@ function addOldStock(body, by, role) {
   if (!liveUnit(unitId)) return { error: 'Choose the unit' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
+  { const miss = rateMissing(model); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 200)) return { error: 'Quantity must be 1 to 200' };
   // compulsory: plain godown stock, or already booked for a client (party name compulsory)
@@ -1744,6 +1758,26 @@ function addOldStock(body, by, role) {
   return { value: { id: '', count: qty } };
 }
 app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
+// Correct the model no. of old stock in a godown (typing mistakes). Admin and Dispatch logins for
+// any unit, a unit for its own godown. Only machines entered as old stock can be changed here.
+app.post('/api/godown/edit-model', (req, res) => {
+  const role = req.user && req.user.role;
+  if (!['admin', 'dispatch', 'unit'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
+  const unitId = role === 'unit' ? req.user.id : str(req.body.unitId);
+  const from = str(req.body.from, 120);
+  const model = canonModel(req.body.model);
+  if (!model) return bad(res, 'Enter the correct model no.');
+  if (model === from) return bad(res, 'The model no. is the same');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
+  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.source === 'stock' && m.status === 'done' && m.location === 'godown');
+  if (!list.length) return bad(res, 'No old stock of this model in that godown');
+  const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
+  const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name;
+  const at = new Date().toISOString();
+  for (const m of list.slice(0, qty)) { (m.modelEdits = m.modelEdits || []).push({ from, to: model, by, at }); m.model = model; }
+  store.save();
+  res.json({ ok: true, changed: qty });
+});
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
 unit.post('/assembly/old-stock', (req, res) => send(res, addOldStock({ ...req.body, unitId: req.user.id, kind: 'godown', party: '' }, (req.user.account.name || req.user.account.username) + ' (unit)', 'unit')));
