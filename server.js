@@ -1094,6 +1094,7 @@ function asmView(m) {
   return {
     id: m.id,
     noRate: !ASM.hasRate(db(), m.model, 'assembly'),
+    creator: ASM.creatorOf(db(), m),
     unitId: m.unitId,
     unitName: unitName(m.unitId),
     model: m.model,
@@ -1180,7 +1181,7 @@ function addMachines(unitId, body, by) {
   if (e.error) return e;
   const now = new Date().toISOString();
   for (let i = 0; i < qty; i++) {
-    db().assembly.push({ id: newId('asm'), unitId, model, status: 'waiting', source: 'new', createdAt: now, createdBy: by, entryBy: e.value, note: str(body.note, 200) });
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'waiting', source: 'new', createdAt: now, createdBy: by, creator: by === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'unit', id: unitId }, entryBy: e.value, note: str(body.note, 200) });
   }
   asmAssign();
   store.save();
@@ -1216,14 +1217,15 @@ function readLocation(body) {
   return { value: { location, godownAt: new Date().toISOString() } };
 }
 // Correct a wrong model no. `scope` = machines that may change together ("same model" tick box).
-function asmEditModel(m, body, by, scope) {
+function asmEditModel(m, body, by, scope, user) {
+  if (user && !ASM.canEditModel(db(), user, m)) return { error: 'Only the login that made this entry (or the admin) can correct the model no.' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   { const miss = rateMissing(model); if (miss) return { error: miss }; }
   if (by !== 'admin' && !['waiting', 'assigned', 'started'].includes(m.status)) return { error: 'Assembled machines can be corrected by the admin only' };
   const old = m.model;
   if (model === old) return { error: 'The model no. is the same' };
-  const list = body.all ? db().assembly.filter((x) => x.model === old && scope(x) && (by === 'admin' || ['waiting', 'assigned', 'started'].includes(x.status))) : [m];
+  const list = body.all ? db().assembly.filter((x) => x.model === old && scope(x) && (!user || ASM.canEditModel(db(), user, x)) && (by === 'admin' || ['waiting', 'assigned', 'started'].includes(x.status))) : [m];
   const at = new Date().toISOString();
   for (const x of list) {
     (x.modelEdits = x.modelEdits || []).push({ from: old, to: model, by, at });
@@ -1306,9 +1308,13 @@ unit.get('/assembly', (req, res) => {
 });
 unit.post('/assembly', (req, res) => send(res, addMachines(req.user.id, req.body, 'unit')));
 unit.post('/assembly/:id/start', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmStart(m, 'unit')); });
-unit.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmEditModel(m, req.body, 'unit', (x) => x.unitId === req.user.id)); });
+unit.post('/assembly/:id/model', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmEditModel(m, req.body, 'unit', (x) => x.unitId === req.user.id, req.user)); });
 unit.post('/assembly/:id/dispatch', (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
-unit.get('/assembly/stock', (req, res) => res.json({ stock: ASM.stock(db(), req.user.id) }));
+unit.get('/assembly/stock', (req, res) => res.json({
+  stock: ASM.stock(db(), req.user.id),
+  // this unit's own wrong entries (no incentive rate) that are now in another unit's godown
+  toFix: ASM.stock(db(), null, (m) => m.unitId !== req.user.id && !ASM.hasRate(db(), m.model) && ASM.canEditModel(db(), req.user, m)),
+}));
 unit.post('/assembly/:id/complete', (req, res) => { const m = asmFind(req, res, (x) => x.unitId === req.user.id); if (m) send(res, asmComplete(m, req.body, 'unit')); });
 
 // Staff (team leader / installation person / helper)
@@ -1366,7 +1372,7 @@ app.post('/api/staff/assembly/:id/crew', need('staff'), (req, res) => {
   res.json({ ok: true, count: list.length });
 });
 
-app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id)); });
+app.post('/api/staff/assembly/:id/model', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmEditModel(m, req.body, req.user.account.name, (x) => x.leaderId === req.user.id, req.user)); });
 app.post('/api/staff/assembly/:id/dispatch', need('staff'), (req, res) => bad(res, 'Dispatch is done from the Dispatch login'));
 app.post('/api/staff/assembly/:id/complete', need('staff'), (req, res) => { const m = asmFind(req, res, myMachine(req)); if (m) send(res, asmComplete(m, req.body, req.user.account.name)); });
 // Team leader passes a machine to another team leader of the unit; ₹ per machine is
@@ -1786,23 +1792,24 @@ function addOldStock(body, by, role) {
   return { value: { id: '', count: qty } };
 }
 app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
-// Correct the model no. of machines in a godown (typing mistakes). Admin and Dispatch logins: any
-// machine in any godown; a unit in its own godown: old stock, and any machine whose model no. has
-// no incentive rate (a wrong name).
+// Correct the model no. of machines in a godown (typing mistakes). Only the login that made the
+// entry can correct it (the admin can correct everything).
 app.post('/api/godown/edit-model', (req, res) => {
   const role = req.user && req.user.role;
-  if (!['admin', 'dispatch', 'unit'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
-  const unitId = role === 'unit' ? req.user.id : str(req.body.unitId);
+  if (!['admin', 'dispatch', 'unit', 'staff'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
+  const unitId = str(req.body.unitId) || (role === 'unit' ? req.user.id : '');
   const from = str(req.body.from, 120);
   const model = canonModel(req.body.model);
   if (!model) return bad(res, 'Enter the correct model no.');
   if (model === from) return bad(res, 'The model no. is the same');
   { const miss = rateMissing(model, 'any'); if (miss) return bad(res, miss); }
-  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown' && (role !== 'unit' || m.source === 'stock' || !ASM.hasRate(db(), m.model)))
-    .sort((a, b) => Number(b.source === 'stock') - Number(a.source === 'stock')); // old stock first
-  if (!list.length) return bad(res, role === 'unit' ? 'Only old stock or a wrong model no. (⚠ no incentive rate) can be corrected from the unit login' : 'No machine of this model in that godown');
+  const inGodown = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown');
+  if (!inGodown.length) return bad(res, 'No machine of this model in that godown');
+  // only the login that made the entry (or the admin) can correct it
+  const list = inGodown.filter((m) => ASM.canEditModel(db(), req.user, m));
+  if (!list.length) return bad(res, 'Only the login that made this entry (or the admin) can correct the model no.');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
-  const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name;
+  const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name || '';
   const at = new Date().toISOString();
   for (const m of list.slice(0, qty)) {
     (m.modelEdits = m.modelEdits || []).push({ from, to: model, by, at });

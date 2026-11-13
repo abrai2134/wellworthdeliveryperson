@@ -1471,7 +1471,9 @@ function asmCard(m, who, me) {
   if (who === 'staff' && open && m.leader && m.leader.id === me) btns.push(`<button class="small" data-asm-crew="${esc(m.id)}">👥 Change team</button>`);
   if (who === 'staff' && open && m.leader && m.leader.id === me) btns.push(`<button class="small" data-asm-divert="${esc(m.id)}">↪ Divert</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-asm-assign="${esc(m.id)}">Change people</button>`);
-  if (canWork && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
+  // only the login that made the entry (or the admin) may correct the model no.
+  const mine = who === 'admin' || (m.creator && state.me && m.creator.role === state.me.role && m.creator.id === state.me.id);
+  if (canWork && mine && (m.status !== 'done' || who === 'admin')) btns.push(`<button class="small" data-asm-model="${esc(m.id)}">✎ Edit model</button>`);
   if (who === 'admin' && m.status === 'done' && m.location === 'godown') btns.push(`<button class="small" data-asm-dispatch="${esc(m.id)}">🚚 Mark dispatched</button>`);
   if (who === 'admin' && m.status === 'done') btns.push(`<button class="small" data-asm-times="${esc(m.id)}">🕒 Edit times</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<div class="spacer"></div><button class="small danger" data-asm-cancel="${esc(m.id)}">Cancel</button>`);
@@ -1776,7 +1778,7 @@ async function renderUnitAssembly() {
     ${asmList(r.items, 'unit')}
     <div id="u-godown"></div>
     <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
-  api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
+  api('/unit/assembly/stock').then((g) => { const box = document.getElementById('u-godown'); if (box) box.innerHTML = godownHtml(g.stock, false, '🏬 Our godown stock') + ((g.toFix || []).length ? godownHtml(g.toFix, false, '⚠ Our entries to correct (now in other godowns)') : '') + '<div class="small muted" style="margin:-8px 0 12px">Dispatch to clients / other units is done from the 🚚 Dispatch login.</div>'; });
   bindUnitSwitch();
   document.getElementById('asm-add').onclick = () => asmAddForm('/unit', renderUnit);
   document.getElementById('add-stock').onclick = () => oldStockForm('/unit/assembly/old-stock', [{ id: state.me.id, name: state.me.name }], renderUnit, true);
@@ -2095,7 +2097,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${(() => { const n = state.me && state.me.role !== 'unit' ? m.qty : m.noRate ? m.qty : m.oldStock; return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : state.me.role === 'admin' ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
