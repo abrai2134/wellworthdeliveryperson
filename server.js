@@ -1097,6 +1097,7 @@ function asmView(m) {
     creator: ASM.creatorOf(db(), m),
     unitId: m.unitId,
     unitName: unitName(m.unitId),
+    asmUnitId: ((m.transfers || [])[0] || {}).from || m.unitId,
     model: m.model,
     status: m.status,
     source: m.source || 'new',
@@ -1285,6 +1286,8 @@ function asmFind(req, res, check) {
   if (!m || (check && !check(m))) { res.status(404).json({ error: 'Machine not found' }); return null; }
   return m;
 }
+// The unit where a machine was assembled (it may later be transferred to another unit's godown).
+const asmUnitOf = (m) => ((m.transfers || [])[0] || {}).from || m.unitId;
 const asmList = (filter) => db().assembly.filter(filter).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '')).map(asmView);
 const recentDone = (m, days = 30) => m.status !== 'done' || (m.completedAt || '') >= new Date(Date.now() - days * 86400000).toISOString();
 const monthOf = (q) => (/^\d{4}-\d{2}$/.test(String(q || '')) ? q : today().slice(0, 7));
@@ -1302,7 +1305,8 @@ app.get('/api/assembly/board', (req, res) => {
 // Unit
 unit.get('/assembly', (req, res) => {
   res.json({
-    items: asmList((m) => m.unitId === req.user.id && m.status !== 'cancelled' && recentDone(m)),
+    // assembly work of this unit: machines assembled here (not ones transferred in, not old stock)
+    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && m.status !== 'cancelled' && recentDone(m)),
     leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
     maxPending: asmSettings().maxPending,
   });

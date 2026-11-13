@@ -1896,7 +1896,7 @@ async function staffAssemblyHtml(wrap) {
 async function adminAssembly(main) {
   const r = await api('/admin/assembly');
   const f = state.asmFilter || { status: 'open', unit: '' };
-  const items = r.items.filter((m) => (!f.unit || m.unitId === f.unit) && (f.status === 'all' || (f.status === 'open' ? m.status !== 'done' : m.status === f.status)));
+  const items = r.items.filter((m) => m.source !== 'stock' && (!f.unit || (m.asmUnitId || m.unitId) === f.unit) && (f.status === 'all' || (f.status === 'open' ? m.status !== 'done' : m.status === f.status)));
   const pendingReq = r.requests.filter((q) => q.status === 'pending');
   const s = r.settings;
   const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
