@@ -1787,7 +1787,8 @@ function addOldStock(body, by, role) {
 }
 app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
 // Correct the model no. of machines in a godown (typing mistakes). Admin and Dispatch logins: any
-// machine in any godown; a unit: only old stock in its own godown.
+// machine in any godown; a unit in its own godown: old stock, and any machine whose model no. has
+// no incentive rate (a wrong name).
 app.post('/api/godown/edit-model', (req, res) => {
   const role = req.user && req.user.role;
   if (!['admin', 'dispatch', 'unit'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
@@ -1797,9 +1798,9 @@ app.post('/api/godown/edit-model', (req, res) => {
   if (!model) return bad(res, 'Enter the correct model no.');
   if (model === from) return bad(res, 'The model no. is the same');
   { const miss = rateMissing(model, 'any'); if (miss) return bad(res, miss); }
-  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown' && (role !== 'unit' || m.source === 'stock'))
+  const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown' && (role !== 'unit' || m.source === 'stock' || !ASM.hasRate(db(), m.model)))
     .sort((a, b) => Number(b.source === 'stock') - Number(a.source === 'stock')); // old stock first
-  if (!list.length) return bad(res, role === 'unit' ? 'No old stock of this model in your godown' : 'No machine of this model in that godown');
+  if (!list.length) return bad(res, role === 'unit' ? 'Only old stock or a wrong model no. (⚠ no incentive rate) can be corrected from the unit login' : 'No machine of this model in that godown');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
   const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name;
   const at = new Date().toISOString();
