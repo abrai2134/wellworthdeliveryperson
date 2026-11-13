@@ -636,7 +636,11 @@ app.get('/api/lookup/makers', needLogin, (req, res) => {
 });
 // The model list is also used by team leaders (request / old machine forms).
 app.get('/api/lookup/machines', (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
-  res.json({ machines: db().machines.map((m) => m.label), details: db().machines.map((m) => ({ label: m.label, desc: m.desc || '' })) });
+  // machine list + model names that have an incentive rate (so the exact rate name can be picked)
+  const s = asmSettings();
+  const details = db().machines.map((m) => ({ label: m.label, desc: m.desc || '' }));
+  for (const x of [...(s.incentives || []), ...(s.dispatchIncentives || [])]) if (x.model && !details.some((d) => ASM.sameRate(d.label, x.model))) details.push({ label: x.model, desc: '' });
+  res.json({ machines: details.map((d) => d.label), details });
 });
 
 // Lists copied before model names were used on their own: switch them over once.
@@ -1132,13 +1136,17 @@ const asmSettings = () => ASM.settings(db());
 // mistake like "T15~CH3" for "TP150~CH3" is caught at once.
 function rateMissing(model) {
   const s = asmSettings();
-  const has = (list) => (list || []).some((x) => ASM.sameModel(x.model, model));
+  const has = (list) => (list || []).some((x) => ASM.sameRate(x.model, model));
   if (!model || has(s.incentives) || has(s.dispatchIncentives)) return '';
-  return `No incentive is set for model "${model}". Check the model no. (pick it from the list), or ask the admin / a team leader to add its incentive rate first.`;
+  return `No incentive is set for model "${model}". Use the exact model name from the list (incentive is paid only for the exact name), or ask the admin / a team leader to add its incentive rate first.`;
 }
 function canonModel(typed) {
   const t = str(typed, 120);
   if (!t) return t;
+  // a name in the incentive lists wins, so what is saved matches the rate exactly
+  const s = asmSettings();
+  const rateName = [...(s.incentives || []), ...(s.dispatchIncentives || [])].map((x) => x.model).find((m) => ASM.sameRate(m, t));
+  if (rateName) return rateName;
   const list = db().machines.map((m) => m.label).filter(Boolean);
   const exact = list.find((l) => ASM.key(l) === ASM.key(t));
   if (exact) return exact;

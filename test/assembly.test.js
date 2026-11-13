@@ -160,15 +160,17 @@ test('new machines go to the team with the fewest open machines, even if it asse
   assert.deepEqual(newOnes.map((m) => m.leaderId), ['L2', 'L2', 'L2', 'L2']);
 });
 
-test('model no. matches without ~, spaces, case or the description in brackets', () => {
+test('model search is loose, but incentive needs the exact model name', () => {
   assert.ok(A.sameModel('FT24BK', 'FT~24BK (DUAL SUCTION POINT)'));
   assert.ok(A.sameModel('ft 24 bk', 'FT~24BK'));
   assert.ok(!A.sameModel('FT24BK', 'FT30~BK ( DUAL SUCTION POINT )'));
   const db = setup();
   db.settings.assembly = { incentives: [{ model: 'FT~24BK (DUAL SUCTION POINT)', leader: 250, installer: 120 }] };
-  const inc = A.incentiveFor(db, 'FT24BK');
-  assert.equal(inc.leader, 250);
-  assert.equal(inc.installer, 120);
+  // incentive only for the exact name (capitals and spaces ignored)
+  assert.equal(A.incentiveFor(db, 'FT24BK').leader, 0);
+  assert.equal(A.incentiveFor(db, 'FT~24BK').leader, 0);
+  assert.equal(A.incentiveFor(db, 'ft~24bk (dual suction point)').leader, 250);
+  assert.equal(A.incentiveFor(db, 'FT~24BK(DUAL SUCTION POINT)').installer, 120);
 });
 
 test('godown transfer bonus counts only transfers to the Shilphata unit', () => {
