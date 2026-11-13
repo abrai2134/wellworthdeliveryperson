@@ -1830,7 +1830,11 @@ app.post('/api/godown/edit-model', (req, res) => {
   const inGodown = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown');
   if (!inGodown.length) return bad(res, 'No machine of this model in that godown');
   // only the login that made the entry (or the admin) can correct it
-  const list = inGodown.filter((m) => ASM.canEditModel(db(), req.user, m));
+  // "Which ones": one group of the line (e.g. assembled by a team leader, or old stock by a unit)
+  const entry = str(req.body.entry, 300);
+  const group = entry ? inGodown.filter((m) => ASM.stockEntry(db(), m) === entry) : inGodown;
+  if (!group.length) return bad(res, 'Those machines are no longer in this godown – refresh the page');
+  const list = group.filter((m) => ASM.canEditModel(db(), req.user, m));
   if (!list.length) return bad(res, 'Only the login that made this entry (or the admin) can correct the model no.');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
   const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name || '';
