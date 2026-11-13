@@ -1866,6 +1866,30 @@ app.post('/api/godown/edit-model', (req, res) => {
   store.save();
   res.json({ ok: true, changed: qty });
 });
+// Old stock entered by mistake (e.g. 4 entered, only 3 there): take the extra ones out of the godown.
+// Old stock only; the admin or the login that made the entry. Kept on record as cancelled.
+app.post('/api/godown/remove', (req, res) => {
+  const role = req.user && req.user.role;
+  if (!['admin', 'dispatch', 'unit', 'staff'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
+  const unitId = str(req.body.unitId) || (role === 'unit' ? req.user.id : '');
+  const from = str(req.body.from, 120);
+  const entry = str(req.body.entry, 300);
+  const entryAt = str(req.body.entryAt, 40);
+  const reason = str(req.body.reason, 150);
+  if (!reason) return bad(res, 'Write why they are removed (e.g. entered 4, only 3 in godown)');
+  const group = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown'
+    && (!entry || (ASM.stockEntry(db(), m) === entry && (!entryAt || ASM.stockEntryAt(m) === entryAt))));
+  const stockOnly = group.filter((m) => m.source === 'stock');
+  if (!stockOnly.length) return bad(res, 'Only old stock entries can be removed here (assembled machines: ask the admin)');
+  const list = stockOnly.filter((m) => ASM.canEditModel(db(), req.user, m)).sort((a, b) => Number(!!a.bookedParty) - Number(!!b.bookedParty)); // unbooked first
+  if (!list.length) return bad(res, 'Only the login that made this entry (or the admin) can remove it');
+  const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
+  const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name || '';
+  const at = new Date().toISOString();
+  for (const m of list.slice(0, qty)) { m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = by; m.cancelReason = 'Removed from stock: ' + reason; }
+  store.save();
+  res.json({ ok: true, removed: qty });
+});
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
 unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the Dispatch login)'));
