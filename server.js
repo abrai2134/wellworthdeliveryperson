@@ -1724,7 +1724,7 @@ admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { na
 
 // Old stock already lying in a unit's godown (before this app): added straight to the godown,
 // no team / assembly incentive; the dispatch incentive applies when it goes to a client.
-function addOldStock(body, by) {
+function addOldStock(body, by, role) {
   const unitId = str(body.unitId);
   if (!liveUnit(unitId)) return { error: 'Choose the unit' };
   const model = canonModel(body.model);
@@ -1738,15 +1738,15 @@ function addOldStock(body, by) {
   if (kind === 'party' && !party) return { error: 'Client (party) name is compulsory' };
   const at = new Date().toISOString();
   for (let i = 0; i < qty; i++) {
-    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, entryBy: `${by} (old stock)`, note: str(body.note, 200), ...(party ? { bookedParty: party } : {}) });
+    db().assembly.push({ id: newId('asm'), unitId, model, status: 'done', source: 'stock', location: 'godown', godownAt: at, createdAt: at, createdBy: by, createdRole: role, entryBy: `${by} (old stock)`, note: str(body.note, 200), ...(party ? { bookedParty: party } : {}) });
   }
   store.save();
   return { value: { id: '', count: qty } };
 }
-app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name)));
-admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin')));
+app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
+admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
-unit.post('/assembly/old-stock', (req, res) => send(res, addOldStock({ ...req.body, unitId: req.user.id, kind: 'godown', party: '' }, (req.user.account.name || req.user.account.username) + ' (unit)')));
+unit.post('/assembly/old-stock', (req, res) => send(res, addOldStock({ ...req.body, unitId: req.user.id, kind: 'godown', party: '' }, (req.user.account.name || req.user.account.username) + ' (unit)', 'unit')));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
