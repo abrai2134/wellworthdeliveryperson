@@ -1514,6 +1514,8 @@ function asmSummary(items) {
 }
 
 // One short line per machine; tap it to open the full card (with its buttons).
+// Model saved under a name that has no incentive rate: no incentive until it is corrected.
+const NORATE = '<span class="badge bad small" style="align-self:flex-start">⚠ No incentive rate – correct the model no.</span>';
 function asmRow(m, who, me) {
   const [cls, label] = ASM_STATUS[m.status] || ['', m.status];
   const crew = [m.installer && '🔧 ' + m.installer.name, m.helper && '🧰 ' + m.helper.name].filter(Boolean).join(' · ') || 'no team yet';
@@ -1522,7 +1524,7 @@ function asmRow(m, who, me) {
     : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : (m.status === 'started' ? 'started ' : 'given ') + ageText(m.startedAt || m.assignedAt);
   return `<details class="done-row asm-row"><summary>
       <span class="badge ${cls} asm-dot" title="${esc(label)}">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔧' : m.status === 'waiting' ? '⏳' : '•'}</span>
-      <span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
+      <span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
       <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>${esc(when)}</span>
     </summary><div class="dr-body">${asmCard(m, who, me)}</div></details>`;
 }
@@ -1537,7 +1539,7 @@ function asmCluster(ms, who, me) {
   const crew = [uniq((x) => x.installer && x.installer.name) && '🔧 ' + uniq((x) => x.installer && x.installer.name), uniq((x) => x.helper && x.helper.name) && '🧰 ' + uniq((x) => x.helper && x.helper.name)].filter(Boolean).join(' · ') || 'no team yet';
   return `<details class="done-row asm-row asm-cluster"><summary>
       <span class="badge ${cls} asm-dot">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔧' : m.status === 'waiting' ? '⏳' : '•'}</span>
-      <span class="dr-main"><b>${esc(m.model)} <span class="qty-tag">× ${ms.length}</span></b><span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
+      <span class="dr-main"><b>${esc(m.model)} <span class="qty-tag">× ${ms.length}</span></b>${m.noRate ? NORATE : ''}<span class="small muted">${esc(crew)}${who === 'admin' ? ' · ' + esc(m.unitName) : ''}</span></span>
       <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>tap to see each</span>
     </summary><div class="dr-body">${ms.map((x) => asmRow(x, who, me)).join('')}</div></details>`;
 }
@@ -1807,9 +1809,9 @@ async function staffAssemblyHtml(wrap) {
     openModal(`<h2>💰 Incentive rates</h2>
       <p class="small muted">You can add a <b>new model</b>. Existing rates can be changed only by the admin.</p>
       <details><summary class="small"><b>🛠️ Assembly rates (${rt.incentives.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Leader ₹</th><th class="num">Install ₹</th></tr></thead><tbody>
-        ${rt.incentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.leader}</td><td class="num">${x.installer}</td></tr>`).join('')}<tr><td class="muted">Other models (default)</td><td class="num">${rt.defaultLeader}</td><td class="num">${rt.defaultInstaller}</td></tr></tbody></table></div></details>
+        ${rt.incentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.leader}</td><td class="num">${x.installer}</td></tr>`).join('')}</tbody></table></div></details>
       <details><summary class="small"><b>🚚 Dispatch rates (${rt.dispatchIncentives.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Dispatch ₹</th></tr></thead><tbody>
-        ${rt.dispatchIncentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.amount}</td></tr>`).join('')}<tr><td class="muted">Other models (default)</td><td class="num">${rt.defaultDispatch}</td></tr></tbody></table></div></details>
+        ${rt.dispatchIncentives.map((x) => `<tr><td>${esc(x.model)}</td><td class="num">${x.amount}</td></tr>`).join('')}</tbody></table></div></details>
       <h3 style="margin-top:12px">Add a new model</h3>
       <label>Rate for *</label><select name="type" id="r-type"><option value="assembly">🛠️ Assembly (leader + installation)</option><option value="dispatch">🚚 Dispatch</option></select>
       <label>⚙️ Model no. *</label><input name="model" list="r-models" required><datalist id="r-models">${opts}</datalist>
@@ -1916,15 +1918,12 @@ async function adminAssembly(main) {
     <form class="card section" id="asm-set" style="margin-top:16px"><h2>Assembly settings</h2>
       <div class="form-grid">
         <div><label>Max pending per team leader</label><input name="maxPending" type="number" min="1" max="50" value="${esc(s.maxPending)}"></div>
-        <div><label>Default incentive – team leader ₹</label><input name="defaultLeader" type="number" min="0" value="${esc(s.defaultLeader)}"></div>
-        <div><label>Default incentive – installation ₹</label><input name="defaultInstaller" type="number" min="0" value="${esc(s.defaultInstaller)}"></div>
-        <div><label>Default dispatch incentive ₹ (dispatch person)</label><input name="defaultDispatch" type="number" min="0" value="${esc(s.defaultDispatch || 0)}"></div>
         <div><label>Max pending per installation person</label><input name="maxInstallerPending" type="number" min="1" max="50" value="${esc(s.maxInstallerPending || 10)}"></div>
         <div><label>Deduction per diverted machine ₹</label><input name="divertPenalty" type="number" min="0" value="${esc(s.divertPenalty ?? 100)}"></div>
       </div>
-      <h3 style="margin-top:12px">🛠️ Assembly incentive per model</h3><div class="muted small">Paid when the machine is assembled: Leader ₹ to the team leader, Install ₹ to the installation person. Models not listed use the default above. The amount is fixed on each machine when it is assembled.</div>
+      <h3 style="margin-top:12px">🛠️ Assembly incentive per model</h3><div class="muted small">Paid when the machine is assembled: Leader ₹ to the team leader, Install ₹ to the installation person. Only the exact model names in this list can be entered and get incentive. The amount is fixed on each machine when it is assembled.</div>
       <div id="inc-rows"></div><button type="button" class="link" id="inc-add">+ Add model</button>
-      <h3 style="margin-top:18px">🚚 Dispatch incentive per model</h3><div class="muted small">Paid to the dispatch person (Dispatch login) for each machine sent to a <b>client</b>. Machines sent to other units count for the monthly bonus below. Models not listed use the default dispatch amount above.</div>
+      <h3 style="margin-top:18px">🚚 Dispatch incentive per model</h3><div class="muted small">Paid to the dispatch person (Dispatch login) for each machine sent to a <b>client</b>. Machines sent to other units count for the monthly bonus below. Only exact model names in this list get dispatch incentive.</div>
       <div id="dinc-rows"></div><div class="row"><button type="button" class="link" id="dinc-add">+ Add model</button><button type="button" class="link" id="dinc-all">⧉ Add all assembly models at one rate</button></div>
       <h3 style="margin-top:18px">🔁 Monthly bonus for godown transfer</h3><div class="muted small">Paid once a month to the dispatch person, by how many machines they sent to the unit(s) ticked below that month. Transfers to other units do not count. Not shown to team leaders or units.</div>
       <label>Bonus only for transfers to</label><div class="row">${A().units.filter((u) => u.active).map((u) => `<label class="check"><input type="checkbox" class="uds-unit" value="${esc(u.id)}" ${(r.bonusUnits || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div>
@@ -2094,7 +2093,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   // One full-width list: a heading per unit, one line per model (qty, oldest, Send).
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
-      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
+      ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
         <span class="godown-qty">${m.qty}</span>${(() => { const n = state.me && state.me.role !== 'unit' ? m.qty : m.oldStock; return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" title="Correct the model no.">✎ Model</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }

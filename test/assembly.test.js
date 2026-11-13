@@ -58,7 +58,9 @@ test('incentive per model and scoreboard', () => {
   assert.equal(l1.incentive, 300);
   assert.equal(l1.avgMinutes, 240);
   assert.equal(b.installers[0].incentive, 150);
-  assert.equal(A.incentiveFor(db, 'other').leader, 100);
+  assert.equal(A.incentiveFor(db, 'other').leader, 0); // not in the list -> no incentive (no default)
+  assert.ok(!A.hasRate(db, 'T15C2', 'assembly'));
+  assert.ok(A.hasRate(db, 'tp150~c2', 'assembly'));
 });
 
 test('a new team leader starts level', () => {

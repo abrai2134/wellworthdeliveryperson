@@ -1093,6 +1093,7 @@ const personBrief = (id) => {
 function asmView(m) {
   return {
     id: m.id,
+    noRate: !ASM.hasRate(db(), m.model, 'assembly'),
     unitId: m.unitId,
     unitName: unitName(m.unitId),
     model: m.model,
@@ -1134,11 +1135,11 @@ const asmSettings = () => ASM.settings(db());
 // that points to one machine. Otherwise it is kept as typed.
 // Every model no. entered must have an incentive rate (assembly or dispatch list), so a typing
 // mistake like "T15~CH3" for "TP150~CH3" is caught at once.
-function rateMissing(model) {
-  const s = asmSettings();
-  const has = (list) => (list || []).some((x) => ASM.sameRate(x.model, model));
-  if (!model || has(s.incentives) || has(s.dispatchIncentives)) return '';
-  return `No incentive is set for model "${model}". Use the exact model name from the list (incentive is paid only for the exact name), or ask the admin / a team leader to add its incentive rate first.`;
+// which = 'assembly': machines to assemble need an assembly rate; 'any': godown stock needs an
+// assembly or a dispatch rate.
+function rateMissing(model, which = 'assembly') {
+  if (!model || ASM.hasRate(db(), model, which)) return '';
+  return `No ${which === 'assembly' ? 'assembly ' : ''}incentive is set for model "${model}". Pick the exact model name from the list – entry is allowed only for models that have an incentive rate. If it is a new model, the admin or a team leader must add its rate first.`;
 }
 function canonModel(typed) {
   const t = str(typed, 120);
@@ -1556,6 +1557,7 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
   if (req.params.action === 'reject') {
     r.status = 'rejected';
   } else if (req.params.action === 'approve' && r.type === 'old') {
+    { const miss = rateMissing(r.model); if (miss) return bad(res, miss); }
     // Old machine claimed by a team leader: added as already assembled, with its times.
     const leader = db().people.find((p) => p.id === r.leaderId && !p.deleted);
     if (!leader) return bad(res, 'That team leader was removed');
@@ -1572,6 +1574,7 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
     r.status = 'approved';
     r.approvedQty = qty;
   } else if (req.params.action === 'approve') {
+    { const miss = rateMissing(r.model); if (miss) return bad(res, miss); }
     const leader = db().people.find((p) => p.id === r.leaderId && p.active && !p.deleted);
     if (!leader) return bad(res, 'That team leader is no longer active');
     const qty = Math.max(1, Math.min(20, parseInt(req.body.qty, 10) || r.qty));
@@ -1750,7 +1753,7 @@ function addOldStock(body, by, role) {
   if (!liveUnit(unitId)) return { error: 'Choose the unit' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  { const miss = rateMissing(model); if (miss) return { error: miss }; }
+  { const miss = rateMissing(model, 'any'); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 200)) return { error: 'Quantity must be 1 to 200' };
   // compulsory: plain godown stock, or already booked for a client (party name compulsory)
@@ -1776,7 +1779,7 @@ app.post('/api/godown/edit-model', (req, res) => {
   const model = canonModel(req.body.model);
   if (!model) return bad(res, 'Enter the correct model no.');
   if (model === from) return bad(res, 'The model no. is the same');
-  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
+  { const miss = rateMissing(model, 'any'); if (miss) return bad(res, miss); }
   const list = db().assembly.filter((m) => m.unitId === unitId && m.model === from && m.status === 'done' && m.location === 'godown' && (role !== 'unit' || m.source === 'stock'))
     .sort((a, b) => Number(b.source === 'stock') - Number(a.source === 'stock')); // old stock first
   if (!list.length) return bad(res, role === 'unit' ? 'No old stock of this model in your godown' : 'No machine of this model in that godown');
