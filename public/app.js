@@ -2112,7 +2112,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${x.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(x.at + ':00Z'))}</span>` : ''}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : state.me.role === 'admin' ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" title="Correct the model no. or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
@@ -2123,19 +2123,35 @@ document.addEventListener('click', async (e) => {
   const [unitId, from, n] = b.dataset.stockEdit.split('|');
   let entries = [];
   try { entries = JSON.parse(b.dataset.entries || '[]'); } catch { entries = []; }
+  let booked = [];
+  try { booked = JSON.parse(b.dataset.booked || '[]'); } catch { booked = []; }
+  const free = Number(n) - booked.reduce((t, x) => t + x.qty, 0);
   const models = await loadMachineList();
   // more than one kind of entry on this line: say which ones are wrong
-  const whichHtml = entries.length > 1 ? `<label>Which ones? *</label><div class="pick-list">${entries.map((x, i) => `<label class="check"><input type="radio" name="entry" value="${i}"> ${esc(x.text)}${x.at ? ` · 🕒 ${esc(fmtTime(x.at + ':00Z'))}` : ''} – ${x.qty}</label>`).join('')}</div>` : '';
+  const whichHtml = entries.length > 1 ? `<div id="ce-which"><label>Which ones? *</label><div class="pick-list">${entries.map((x, i) => `<label class="check"><input type="radio" name="entry" value="${i}"> ${esc(x.text)}${x.at ? ` · 🕒 ${esc(fmtTime(x.at + ':00Z'))}` : ''} – ${x.qty}</label>`).join('')}</div></div>` : '';
   openModal(`<h2>✎ Correct entry</h2><div class="muted small">In the godown as <b>${esc(from)}</b> (${n} machine${n === '1' ? '' : 's'}).</div>
     ${whichHtml}
     <label>What is wrong? *</label>
-    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="remove"> ➖ ${state.me && state.me.role === 'admin' ? 'Entered by mistake – remove from godown' : 'Too many entered (old stock) – remove extra'}</label></div>
+    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="book"> 👤 Change booking (client)</label><label class="check"><input type="radio" name="act" value="remove"> ➖ ${state.me && state.me.role === 'admin' ? 'Entered by mistake – remove from godown' : 'Too many entered (old stock) – remove extra'}</label></div>
     <div id="ce-model"><label>Correct model no. *</label><input name="model" list="asm-models-gs" placeholder="type and pick from the list"></div>
+    <div id="ce-book" hidden>
+      <label>Which machines? *</label><select name="fromParty">${free > 0 ? `<option value="">🏬 Free stock (not booked) – ${free}</option>` : ''}${booked.map((x) => `<option value="${esc(x.party)}">👤 Booked: ${esc(x.party)} – ${x.qty}</option>`).join('')}</select>
+      <div class="lookup"><label>New client name</label><input name="toParty" id="ce-party" autocomplete="off" placeholder="type party name – leave empty to make them free stock"><div id="ce-party-list" class="lookup-list" hidden></div></div>
+    </div>
     <div id="ce-remove" hidden><label>Why? *</label><input name="reason" placeholder="e.g. entered 4, only 3 in godown"></div>
     <datalist id="asm-models-gs">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
     <label id="ce-qty-label">How many to change</label><input name="qty" type="number" min="1" max="${esc(n)}" value="${esc(n)}">
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
   async (fd) => {
+    if (fd.get('act') === 'book') {
+      const fromParty = fd.get('fromParty') || '';
+      const toParty = String(fd.get('toParty') || '').trim();
+      if (fromParty === toParty) throw new Error(fromParty ? 'The client name is the same' : 'Enter the client name to book these machines for');
+      const r = await api('/godown/booking', { method: 'POST', body: { unitId, model: from, fromParty, toParty, qty: fd.get('qty') } });
+      toast(toParty ? `${r.changed} booked for ${toParty}` : `${r.changed} made free stock`);
+      render();
+      return;
+    }
     if (entries.length > 1 && fd.get('entry') === null) throw new Error('Choose which ones to change');
     const entry = entries.length > 1 ? entries[Number(fd.get('entry'))] : null;
     if (entry && Number(fd.get('qty')) > entry.qty) throw new Error(`Only ${entry.qty} in that group`);
@@ -2152,12 +2168,25 @@ document.addEventListener('click', async (e) => {
     }
     render();
   });
+  clientSearch(document.getElementById('ce-party'), document.getElementById('ce-party-list'));
+  const fromSel = modalBody.querySelector('[name=fromParty]');
+  const syncBook = () => {
+    const p = fromSel.value; const q = modalBody.querySelector('[name=qty]');
+    const k = p ? (booked.find((x) => x.party === p) || {}).qty || 1 : free;
+    q.max = k; q.value = k;
+    document.getElementById('ce-party').value = p;
+  };
+  fromSel.onchange = syncBook;
   modalBody.querySelectorAll('[name=act]').forEach((r) => (r.onchange = () => {
-    const rm = modalBody.querySelector('[name=act]:checked').value === 'remove';
-    document.getElementById('ce-model').hidden = rm;
+    const act = modalBody.querySelector('[name=act]:checked').value;
+    const rm = act === 'remove';
+    document.getElementById('ce-model').hidden = act !== 'model';
     document.getElementById('ce-remove').hidden = !rm;
+    document.getElementById('ce-book').hidden = act !== 'book';
+    const which = document.getElementById('ce-which'); if (which) which.hidden = act === 'book';
     document.getElementById('ce-qty-label').textContent = rm ? 'How many to remove' : 'How many to change';
     const q = modalBody.querySelector('[name=qty]'); if (rm) q.value = 1;
+    if (act === 'book') syncBook();
   }));
   modalBody.querySelectorAll('[name=entry]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; q.value = e.qty; }));
 });

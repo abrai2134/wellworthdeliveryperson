@@ -1897,6 +1897,30 @@ app.post('/api/godown/remove', (req, res) => {
   store.save();
   res.json({ ok: true, removed: qty });
 });
+// Change a booking in a godown: rename the client, move to another client, book free stock or
+// make booked machines free again. Admin, Dispatch logins, or the login that made the entry.
+app.post('/api/godown/booking', (req, res) => {
+  const role = req.user && req.user.role;
+  if (!['admin', 'dispatch', 'unit', 'staff'].includes(role)) return res.status(403).json({ error: 'Not allowed' });
+  const unitId = str(req.body.unitId) || (role === 'unit' ? req.user.id : '');
+  const model = str(req.body.model, 120);
+  const fromParty = str(req.body.fromParty, 120); // '' = free stock
+  const toParty = str(req.body.toParty, 120); // '' = not booked
+  if (fromParty === toParty) return bad(res, fromParty ? 'The client name is the same' : 'Enter the client name to book these machines for');
+  const group = db().assembly.filter((m) => m.unitId === unitId && m.model === model && m.status === 'done' && m.location === 'godown' && (m.bookedParty || '') === fromParty);
+  if (!group.length) return bad(res, 'Those machines are no longer in this godown – refresh the page');
+  const list = group.filter((m) => role === 'admin' || role === 'dispatch' || ASM.canEditModel(db(), req.user, m));
+  if (!list.length) return bad(res, 'Only the admin, a Dispatch login or the login that made the entry can change this booking');
+  const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || list.length));
+  const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name || '';
+  const at = new Date().toISOString();
+  for (const m of list.slice(0, qty)) {
+    (m.bookingEdits = m.bookingEdits || []).push({ from: fromParty, to: toParty, by, at });
+    if (toParty) m.bookedParty = toParty; else delete m.bookedParty;
+  }
+  store.save();
+  res.json({ ok: true, changed: qty });
+});
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
 unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the Dispatch login)'));
