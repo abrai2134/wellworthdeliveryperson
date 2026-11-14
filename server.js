@@ -1306,7 +1306,8 @@ app.get('/api/assembly/board', (req, res) => {
 unit.get('/assembly', (req, res) => {
   res.json({
     // assembly work of this unit: machines assembled here (not ones transferred in, not old stock)
-    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && m.status !== 'cancelled' && recentDone(m)),
+    // open work only – assembled machines are shown to the admin only
+    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && m.status !== 'cancelled' && m.status !== 'done'),
     leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
     maxPending: asmSettings().maxPending,
   });
@@ -1329,7 +1330,8 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
   res.json({
     isLeader: p.role === 'leader',
     // own machines, plus machines this leader entered (so a wrong entry can be corrected)
-    items: asmList((m) => m.status !== 'cancelled' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id && m.status !== 'done')) && recentDone(m)),
+    // open work only (assembled machines: admin only)
+    items: asmList((m) => m.status !== 'cancelled' && m.status !== 'done' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
     unitId: p.unitId,
     unitName: unitName(p.unitId),
     stock: p.role === 'leader' ? ASM.stock(db(), p.unitId) : [],

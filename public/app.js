@@ -1499,9 +1499,11 @@ function asmCard(m, who, me) {
 }
 
 // Summary: for each team leader, how many of each model are given / assembling / assembled.
-function asmSummary(items) {
+// showDone: the "Assembled" column is for the admin only; team leaders and units see open work.
+function asmSummary(items, showDone) {
   const groups = {};
   for (const m of items) {
+    if (!showDone && m.status === 'done') continue;
     const leader = m.leader ? m.leader.name : '⏳ Waiting for a team leader';
     const g = (groups[leader] = groups[leader] || { models: {}, open: 0 });
     const r = (g.models[m.model] = g.models[m.model] || { given: 0, started: 0, done: 0, waiting: 0 });
@@ -1511,10 +1513,10 @@ function asmSummary(items) {
   const names = Object.keys(groups).sort((a, b) => (a.startsWith('⏳') ? 1 : 0) - (b.startsWith('⏳') ? 1 : 0) || a.localeCompare(b));
   if (!names.length) return '';
   const rows = names.flatMap((n) => Object.entries(groups[n].models).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(groups[n].models).length}"><b>${esc(n)}</b>${n.startsWith('⏳') ? '' : `<div class="small muted">${groups[n].open} open</div>`}</td>` : ''}
-      <td>${esc(model)}</td><td class="num"><b>${r.given + r.started + r.waiting + r.done}</b></td><td class="num">${r.waiting || r.given || ''}</td><td class="num">${r.started || ''}</td><td class="num">${r.done || ''}</td></tr>`));
+      <td>${esc(model)}</td><td class="num"><b>${r.given + r.started + r.waiting + (showDone ? r.done : 0)}</b></td><td class="num">${r.waiting || r.given || ''}</td><td class="num">${r.started || ''}</td>${showDone ? `<td class="num">${r.done || ''}</td>` : ''}</tr>`));
   return `<div class="card section"><h3 style="margin-top:0">📦 Given to each team leader</h3><div class="table-wrap"><table>
-    <thead><tr><th>Team leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">Assembling</th><th class="num">Assembled</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
-    <div class="small muted" style="margin-top:4px">Assembled = last 30 days.</div></div>`;
+    <thead><tr><th>Team leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">Assembling</th>${showDone ? '<th class="num">Assembled</th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    ${showDone ? '<div class="small muted" style="margin-top:4px">Assembled = last 30 days.</div>' : ''}</div>`;
 }
 
 // One short line per machine; tap it to open the full card (with its buttons).
@@ -1590,8 +1592,9 @@ function asmGrouped(list, who, me) {
 function asmList(items, who, me) {
   const open = items.filter((m) => m.status !== 'done');
   const done = items.filter((m) => m.status === 'done');
-  return `${asmSummary(items)}${open.length ? asmGrouped(open, who, me) : '<div class="card muted">No machine pending.</div>'}
-    ${done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div style="margin-top:10px">${asmGrouped(done, who, me)}</div></details>` : ''}`;
+  const admin = who === 'admin'; // assembled machines: admin only
+  return `${asmSummary(items, admin)}${open.length ? asmGrouped(open, who, me) : '<div class="card muted">No machine pending.</div>'}
+    ${admin && done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div style="margin-top:10px">${asmGrouped(done, who, me)}</div></details>` : ''}`;
 }
 
 async function asmBoardHtml(month, maxPending) {
@@ -1928,7 +1931,7 @@ async function adminAssembly(main) {
     <div class="row section" style="margin-top:16px"><h2 style="margin:0">Machines</h2><div class="spacer"></div>
       <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
       <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
-    ${asmSummary(items)}
+    ${asmSummary(items, true)}
     ${items.length ? asmGrouped(items, 'admin') : '<div class="card muted">No machines.</div>'}
     <form class="card section" id="asm-set" style="margin-top:16px"><h2>Assembly settings</h2>
       <div class="form-grid">
