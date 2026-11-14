@@ -1802,9 +1802,20 @@ async function drawBoard(month, maxPending, reload) {
   document.getElementById('asm-month').onchange = (e) => { state.asmMonth = e.target.value; drawBoard(e.target.value, maxPending, reload); };
 }
 
+// Installation person / helper: every machine they worked on in a month, with their incentive.
+function myMachinesHtml(mm) {
+  const list = mm.list || [];
+  const total = list.reduce((t, x) => t + x.amount, 0);
+  return `<div class="card section"><div class="row"><h3 style="margin:0">🧾 My machines – ${esc(mm.month)}</h3><div class="spacer"></div><input type="month" id="my-asm-month" value="${esc(mm.month)}" style="width:auto"></div>
+    ${list.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Assembled</th><th>Model no.</th><th>Team leader</th><th>My work</th><th class="num">Incentive</th></tr></thead><tbody>
+      ${list.map((x, i) => `<tr><td>${i + 1}</td><td class="small">${esc(fmtTime(x.at))}</td><td>${esc(x.model)}</td><td>${esc(x.leader)}</td><td>${x.role === 'Installation' ? '🔧 Installation' : '🧰 Helper'}</td><td class="num">${x.amount ? '₹' + x.amount : '—'}</td></tr>`).join('')}
+      <tr><td></td><td colspan="4"><b>Total – ${list.length} machine${list.length === 1 ? '' : 's'}</b></td><td class="num"><b>₹${total}</b></td></tr></tbody></table></div>`
+    : '<p class="muted small">No machine assembled with you in this month.</p>'}</div>`;
+}
+
 // ----- team leader / installation person / helper -----
 async function staffAssemblyHtml(wrap) {
-  const r = await api('/staff/assembly');
+  const r = await api('/staff/assembly' + (state.myAsmMonth ? '?month=' + state.myAsmMonth : ''));
   const me = state.me.id;
   const box = document.createElement('div');
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
@@ -1812,10 +1823,13 @@ async function staffAssemblyHtml(wrap) {
       ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="primary small" id="asm-new-l">+ Machines for assembly</button> <button class="small" id="asm-stock-l">📦 Add stock</button> <button class="small" id="asm-req">📝 Request machines</button> <button class="small" id="asm-old-l">📁 Add old machine</button> <button class="small" id="asm-rates">💰 Incentive rates</button>` : ''}</div>
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
     ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">${q.type === 'old' ? '📁 Old machine: ' : '⚙️ '}${esc(q.model)} × ${q.qty}${q.type === 'old' ? ` (${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))})` : ''} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
+    ${!r.isLeader && r.myMonth ? myMachinesHtml(r.myMonth) : ''}
     ${r.isLeader ? godownHtml(r.stock || [], false, `🏬 ${esc(r.unitName || 'Our')} godown stock`) + ((r.toFix || []).length ? godownHtml(r.toFix, false, '⚠ My entries to correct (now in other godowns)') : '') : ''}
     <div id="asm-board"></div>`;
   wrap.appendChild(box);
   bindAsm(box, '/staff/assembly', r.items, renderStaff);
+  const mm = document.getElementById('my-asm-month');
+  if (mm) mm.onchange = (e) => { state.myAsmMonth = e.target.value; renderStaff(); };
   const newBtn = document.getElementById('asm-new-l');
   if (newBtn) newBtn.onclick = () => asmAddForm('/staff', renderStaff);
   const stockBtn = document.getElementById('asm-stock-l');

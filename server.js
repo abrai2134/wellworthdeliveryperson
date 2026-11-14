@@ -1345,7 +1345,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     maxPending: asmSettings().maxPending,
     // My own incentive this month (team leader share or installation share).
     myMonth: (() => {
-      const month = today().slice(0, 7);
+      const month = monthOf(req.query.month);
       const done = db().assembly.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
       const asLeader = done.filter((m) => m.leaderId === p.id);
       const asInst = done.filter((m) => m.installerId === p.id);
@@ -1354,6 +1354,13 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
         month,
         machines: asLeader.length + asInst.length + asHelp.length,
         incentive: asLeader.reduce((n, m) => n + ((m.incentive && m.incentive.leader) || 0), 0) + asInst.reduce((n, m) => n + ((m.incentive && m.incentive.installer) || 0), 0) - ASM.deductionsOf(db(), p.id, month),
+        // installation persons / helpers: every machine they worked on this month, to check their incentive
+        list: p.role === 'leader' ? [] : done.filter((m) => m.installerId === p.id || m.helperId === p.id)
+          .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))
+          .map((m) => {
+            const asI = m.installerId === p.id;
+            return { at: m.completedAt, model: m.model, leader: personName(m.leaderId), role: asI ? 'Installation' : 'Helper', amount: asI ? (m.incentive && m.incentive.installer) || 0 : 0 };
+          }),
       };
     })(),
   });
