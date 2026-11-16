@@ -2069,7 +2069,19 @@ const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.a
 // Painting: what is coming from fab, what is in painting, and the last 30 days of in / out.
 function paintingView() {
   const P = db().painting;
-  const group = (list) => Object.values(list.reduce((o, x) => { (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {} }).qty++; if (x.unitId) o[x.model].units[x.unitId] = (o[x.model].units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {})).sort((a, b) => a.model.localeCompare(b.model));
+  // where each machine came from, when, and who made the entry
+  const entry = (x) => {
+    const f = x.fabId ? db().fab.find((m) => m.id === x.fabId) : null;
+    const fromFab = f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '';
+    if (x.status === 'coming') return { text: `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
+    return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
+  };
+  const group = (list) => Object.values(list.reduce((o, x) => {
+    const gm = (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {}, entries: {} });
+    const e = entry(x); const k = e.text + '|' + e.at; (gm.entries[k] ||= { ...e, qty: 0 }).qty++;
+    gm.qty++; if (x.unitId) gm.units[x.unitId] = (gm.units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {}))
+    .map((g) => ({ ...g, entries: Object.values(g.entries).sort((a, b) => b.at.localeCompare(a.at)) }))
+    .sort((a, b) => a.model.localeCompare(b.model));
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   const hist = [];
   for (const x of P) {

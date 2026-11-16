@@ -2516,7 +2516,7 @@ function bindFab(root, base, items, reload, people) {
 
 // Painting: ⬇ In (from fab, or added directly) and ⬆ Out (to a unit's assembly).
 function paintingHtml(v) {
-  const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span></span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
+  const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)}${e.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>` : ''}${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : ''}</span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
   return `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span></div>
       <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span><button class="small" id="paint-add">+ Machine in (not from fab)</button></div>
