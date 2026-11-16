@@ -2155,17 +2155,29 @@ document.addEventListener('click', async (e) => {
   openModal(`<h2>✎ Correct entry</h2><div class="muted small">In the godown as <b>${esc(from)}</b> (${n} machine${n === '1' ? '' : 's'}).</div>
     ${whichHtml}
     <label>What is wrong? *</label>
-    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="book"> 👤 Change booking (client)</label><label class="check"><input type="radio" name="act" value="remove"> ➖ ${state.me && state.me.role === 'admin' ? 'Entered by mistake – remove from godown' : 'Too many entered (old stock) – remove extra'}</label></div>
+    <div class="row"><label class="check"><input type="radio" name="act" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="act" value="book"> 👤 Change booking (client)</label>${state.me && state.me.role === 'admin' ? '<label class="check"><input type="radio" name="act" value="add"> ➕ Some were missed – add more</label>' : ''}<label class="check"><input type="radio" name="act" value="remove"> ➖ ${state.me && state.me.role === 'admin' ? 'Entered by mistake – remove from godown' : 'Too many entered (old stock) – remove extra'}</label></div>
     <div id="ce-model"><label>Correct model no. *</label><input name="model" list="asm-models-gs" placeholder="type and pick from the list"></div>
     <div id="ce-book" hidden>
       <label>Which machines? *</label><select name="fromParty">${free > 0 ? `<option value="">🏬 Free stock (not booked) – ${free}</option>` : ''}${booked.map((x) => `<option value="${esc(x.party)}">👤 Booked: ${esc(x.party)} – ${x.qty}</option>`).join('')}</select>
       <div class="lookup"><label>New client name</label><input name="toParty" id="ce-party" autocomplete="off" placeholder="type party name – leave empty to make them free stock"><div id="ce-party-list" class="lookup-list" hidden></div></div>
+    </div>
+    <div id="ce-add" hidden>
+      <div class="lookup"><label>Booked for (optional)</label><input name="addParty" id="ce-add-party" autocomplete="off" placeholder="leave empty for free godown stock"><div id="ce-add-party-list" class="lookup-list" hidden></div></div>
+      <label>Why? *</label><input name="addReason" placeholder="e.g. 2 machines missed in the count">
     </div>
     <div id="ce-remove" hidden><label>Why? *</label><input name="reason" placeholder="e.g. entered 4, only 3 in godown"></div>
     <datalist id="asm-models-gs">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
     <label id="ce-qty-label">How many to change</label><input name="qty" type="number" min="1" max="${esc(n)}" value="${esc(n)}">
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
   async (fd) => {
+    if (fd.get('act') === 'add') {
+      if (!String(fd.get('addReason') || '').trim()) throw new Error('Write why they are added');
+      const party = String(fd.get('addParty') || '').trim();
+      await api('/admin/godown/stock', { method: 'POST', body: { unitId, model: from, qty: fd.get('qty'), kind: party ? 'party' : 'godown', party, note: 'Missed earlier – ' + fd.get('addReason') } });
+      toast(`${fd.get('qty')} × ${from} added to the godown`);
+      render();
+      return;
+    }
     if (fd.get('act') === 'book') {
       const fromParty = fd.get('fromParty') || '';
       const toParty = String(fd.get('toParty') || '').trim();
@@ -2192,6 +2204,7 @@ document.addEventListener('click', async (e) => {
     render();
   });
   clientSearch(document.getElementById('ce-party'), document.getElementById('ce-party-list'));
+  if (document.getElementById('ce-add-party')) clientSearch(document.getElementById('ce-add-party'), document.getElementById('ce-add-party-list'));
   const fromSel = modalBody.querySelector('[name=fromParty]');
   const syncBook = () => {
     const p = fromSel.value; const q = modalBody.querySelector('[name=qty]');
@@ -2206,9 +2219,11 @@ document.addEventListener('click', async (e) => {
     document.getElementById('ce-model').hidden = act !== 'model';
     document.getElementById('ce-remove').hidden = !rm;
     document.getElementById('ce-book').hidden = act !== 'book';
-    const which = document.getElementById('ce-which'); if (which) which.hidden = act === 'book';
-    document.getElementById('ce-qty-label').textContent = rm ? 'How many to remove' : 'How many to change';
-    const q = modalBody.querySelector('[name=qty]'); if (rm) q.value = 1;
+    document.getElementById('ce-add').hidden = act !== 'add';
+    const which = document.getElementById('ce-which'); if (which) which.hidden = act === 'book' || act === 'add';
+    document.getElementById('ce-qty-label').textContent = rm ? 'How many to remove' : act === 'add' ? 'How many to add' : 'How many to change';
+    const q = modalBody.querySelector('[name=qty]'); if (rm || act === 'add') q.value = 1;
+    if (act === 'add') q.max = 200;
     if (act === 'book') syncBook();
   }));
   modalBody.querySelectorAll('[name=entry]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; q.value = e.qty; }));
