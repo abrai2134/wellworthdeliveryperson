@@ -2172,20 +2172,43 @@ admin.get('/fab', (req, res) => {
 admin.post('/fab', (req, res) => send(res, fabAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
 admin.post('/fab/:id/start', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabStart(m, 'admin')); });
 admin.post('/fab/:id/done', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabDone(m, req.body, 'admin')); });
-admin.post('/fab/:id/assign', (req, res) => {
-  const m = fabFind(req, res);
-  if (!m) return;
-  if (!FAB.PENDING.includes(m.status) && m.status !== 'waiting') return bad(res, 'Only machines not finished can be changed');
-  const leaderId = str(req.body.leaderId);
-  const helperId = str(req.body.helperId);
-  if (leaderId && !db().people.some((p) => p.id === leaderId && p.role === 'fableader' && !p.deleted)) return bad(res, 'Choose a fab team leader');
-  if (helperId && !db().people.some((p) => p.id === helperId && p.role === 'fabhelper' && !p.deleted)) return bad(res, 'Choose a fab helper');
-  (m.edits = m.edits || []).push({ at: new Date().toISOString(), by: 'admin', from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId, helperId } });
+// Give a fab machine to a fab leader / helper by hand (admin, or the unit manager for its unit).
+// Leader and helper must be of the machine's unit.
+function fabSetPeople(m, body, by) {
+  if (!FAB.PENDING.includes(m.status) && m.status !== 'waiting') return { error: 'Only machines not finished can be changed' };
+  const leaderId = str(body.leaderId);
+  const helperId = str(body.helperId);
+  const ok = (id, role) => db().people.some((p) => p.id === id && p.role === role && !p.deleted && p.active && (!m.unitId || p.unitId === m.unitId));
+  if (leaderId && !ok(leaderId, 'fableader')) return { error: 'Choose a fab team leader of this unit' };
+  if (helperId && !ok(helperId, 'fabhelper')) return { error: 'Choose a fab helper of this unit' };
+  (m.edits = m.edits || []).push({ at: new Date().toISOString(), by, from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId, helperId } });
   m.leaderId = leaderId || null; m.helperId = helperId || null;
   if (m.leaderId && m.status === 'waiting') { m.status = 'assigned'; m.assignedAt = new Date().toISOString(); }
   if (!m.leaderId) { m.status = 'waiting'; m.assignedAt = null; m.startedAt = null; }
+  m.manual = true;
   store.save();
-  res.json({ ok: true });
+  return { value: m };
+}
+admin.post('/fab/:id/assign', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabSetPeople(m, req.body, 'admin')); });
+// Unit login: its own fab – enter machines and share them between its fab leaders.
+const unitFabPeople = (unitId, role) => db().people.filter((p) => p.role === role && p.active && !p.deleted && p.unitId === unitId).map((p) => ({ id: p.id, name: p.name, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
+unit.get('/fab', (req, res) => {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  res.json({
+    items: db().fab.filter((m) => m.unitId === req.user.id && FAB.OPEN.includes(m.status)).map(fabView),
+    done: db().fab.filter((m) => m.unitId === req.user.id && m.status === 'done' && (m.completedAt || '') >= since).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
+    leaders: unitFabPeople(req.user.id, 'fableader'),
+    helpers: unitFabPeople(req.user.id, 'fabhelper'),
+    maxPending: FAB.settings(db()).maxPending,
+  });
+});
+unit.post('/fab', (req, res) => {
+  const a = req.user.account;
+  send(res, fabAdd({ ...req.body, unitId: req.user.id }, (a.name || a.username) + ' (unit)', { role: 'unit', id: req.user.id }));
+});
+unit.post('/fab/:id/assign', (req, res) => {
+  const m = fabFind(req, res, (x) => x.unitId === req.user.id);
+  if (m) send(res, fabSetPeople(m, req.body, (req.user.account.name || req.user.account.username) + ' (unit)'));
 });
 admin.post('/fab/:id/cancel', (req, res) => {
   const m = fabFind(req, res);

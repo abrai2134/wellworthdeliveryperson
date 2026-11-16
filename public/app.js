@@ -887,6 +887,7 @@ async function renderUnit() {
     bindLogout();
   }
   if (state.unitMode === 'assembly') return renderUnitAssembly();
+  if (state.unitMode === 'fab') return renderUnitFab();
   const data = await api('/unit/home');
   const t = data.today;
   state.today = t;
@@ -1782,7 +1783,7 @@ async function asmAddForm(base, reload) {
 
 // ----- unit: Jobs | Assembly switch -----
 function unitSwitchHtml(cur) {
-  return `<div class="seg no-print"><button data-umode="jobs" class="${cur === 'jobs' ? 'on' : ''}">🚚 Jobs</button><button data-umode="assembly" class="${cur === 'assembly' ? 'on' : ''}">🛠️ Assembly</button></div>`;
+  return `<div class="seg no-print"><button data-umode="jobs" class="${cur === 'jobs' ? 'on' : ''}">🚚 Jobs</button><button data-umode="assembly" class="${cur === 'assembly' ? 'on' : ''}">🛠️ Assembly</button><button data-umode="fab" class="${cur === 'fab' ? 'on' : ''}">🏭 Fab</button></div>`;
 }
 function bindUnitSwitch() {
   document.querySelectorAll('[data-umode]').forEach((b) => (b.onclick = () => { state.unitMode = b.dataset.umode; renderUnit(); }));
@@ -2365,6 +2366,7 @@ function fabRow(m, who) {
   if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-fab-start="${esc(m.id)}">▶ Start</button>`);
   if (canWork && (m.status === 'assigned' || m.status === 'started')) btns.push(`<button class="small primary" data-fab-done="${esc(m.id)}">✓ Fab done</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-fab-assign="${esc(m.id)}">Change people</button><button class="small danger" data-fab-cancel="${esc(m.id)}">Cancel</button>`);
+  if (who === 'unit' && m.status !== 'done') btns.push(`<button class="small${m.leader ? '' : ' primary'}" data-fab-assign="${esc(m.id)}">${m.leader ? 'Change fab leader' : 'Give to fab leader'}</button>`);
   const when = m.status === 'done' ? 'done ' + fmtTime(m.completedAt) : m.status === 'started' ? 'started ' + ageText(m.startedAt) : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : 'given ' + ageText(m.assignedAt);
   return `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${m.unitName ? '🏢 ' + esc(m.unitName) + ' · ' : ''}${esc(team)}</span><span class="small muted">added ${esc(fmtTime(m.createdAt))} by ${esc(m.createdBy)}</span></span>
     <span class="dr-side small"><span class="badge ${cls}">${esc(label)}</span><br>${esc(when)}</span>${btns.length ? `<span class="row" style="gap:4px">${btns.join('')}</span>` : ''}</div>`;
@@ -2411,7 +2413,7 @@ function bindFab(root, base, items, reload, people) {
   }));
   root.querySelectorAll('[data-fab-assign]').forEach((b) => (b.onclick = () => {
     const m = find(b.dataset.fabAssign);
-    const opt = (list, cur) => `<option value="">— none —</option>${list.map((p) => `<option value="${esc(p.id)}" ${cur && cur.id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}`;
+    const opt = (list, cur) => `<option value="">— none —</option>${list.filter((p) => !m.unitId || !p.unitId || p.unitId === m.unitId).map((p) => `<option value="${esc(p.id)}" ${cur && cur.id === p.id ? 'selected' : ''}>${esc(p.name)}${p.pending !== undefined ? ` (${p.pending} pending)` : ''}</option>`).join('')}`;
     openModal(`<h2>Change people</h2><div class="muted">⚙️ ${esc(m.model)}</div>
       <label>🏭 Fab leader</label><select name="leaderId">${opt(people.leaders, m.leader)}</select>
       <label>🧰 Fab helper</label><select name="helperId">${opt(people.helpers, m.helper)}</select>
@@ -2485,6 +2487,23 @@ async function renderFabStaff() {
   const add = document.getElementById('fab-add');
   if (add) add.onclick = fabAddForm('/staff/fab', renderStaff, r.units, r.unitId);
   document.getElementById('fab-month').onchange = (e) => { state.fabMonth = e.target.value; renderStaff(); };
+}
+
+// Unit login: 🏭 Fab – the unit manager enters machines and shares them between its fab leaders.
+async function renderUnitFab() {
+  const wrap = $app.querySelector('.wrap');
+  const r = await api('/unit/fab');
+  wrap.innerHTML = `${unitSwitchHtml('fab')}
+    <div class="row section"><div><h1 style="margin:0">🏭 Fab</h1>
+      <div class="small muted">Fab leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none – ask the admin to add fab leaders for this unit'}</div></div>
+      <div class="spacer"></div><button class="primary" id="ufab-add">+ Machines for fab</button></div>
+    <div class="small muted" style="margin-bottom:8px">New machines are given automatically to the fab leader with the fewest open. Use <b>Change fab leader</b> to give a machine to someone else (max ${r.maxPending} pending per leader).</div>
+    ${fabSummaryHtml(r.items)}
+    <div class="done-list">${r.items.length ? r.items.map((m) => fabRow(m, 'unit')).join('') : '<div class="card muted">No machine in fab.</div>'}</div>
+    ${r.done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Fab done – last 30 days (${r.done.length})</b></summary><div class="done-list" style="margin-top:8px">${r.done.map((m) => fabRow(m, 'unit')).join('')}</div></details>` : ''}`;
+  bindUnitSwitch();
+  bindFab(wrap, '/unit/fab', [...r.items, ...r.done], renderUnit, r);
+  document.getElementById('ufab-add').onclick = fabAddForm('/unit/fab', renderUnit, [{ id: state.me.id, name: state.me.name }], state.me.id);
 }
 
 // Admin: 🏭 Fab & Painting tab
