@@ -1601,13 +1601,20 @@ admin.post('/assembly/old', (req, res) => {
   { const miss = rateMissing(model); if (miss) return bad(res, miss); }
   const qty = parseInt(req.body.qty, 10) || 1;
   if (qty < 1 || qty > 50) return bad(res, 'Quantity must be 1 to 50');
-  const leader = db().people.find((p) => p.id === str(req.body.leaderId) && p.role === 'leader' && !p.deleted);
-  if (!leader) return bad(res, 'Choose the team leader');
-  const t = asmTimes({}, req.body, true);
-  if (t.error) return bad(res, t.error);
+  // Team leader, installation person and helper are optional for the admin (old stock found later).
+  // With a team leader the times are compulsory (they count for the scoreboard); without one, now.
+  const leaderId = str(req.body.leaderId);
+  const leader = leaderId ? db().people.find((p) => p.id === leaderId && p.role === 'leader' && !p.deleted) : null;
+  if (leaderId && !leader) return bad(res, 'That team leader was not found');
+  let t = asmTimes({}, req.body, true);
+  if (t.error) {
+    if (leader) return bad(res, t.error);
+    const now = new Date().toISOString();
+    t = { value: { started: now, completed: now } };
+  }
   for (let i = 0; i < qty; i++) {
     db().assembly.push({
-      id: newId('asm'), unitId, model, status: 'done', source: 'old', leaderId: leader.id,
+      id: newId('asm'), unitId, model, status: 'done', source: 'old', leaderId: leader ? leader.id : null,
       installerId: str(req.body.installerId) || null, helperId: str(req.body.helperId) || null,
       createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),

@@ -2067,16 +2067,21 @@ async function adminAssembly(main) {
     const ppl = A().people.filter((p) => p.active || true);
     const sel = (name, roles, label) => `<label>${label}</label><select name="${name}"><option value="">— none —</option>${ppl.filter((p) => roles.includes(p.role)).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.unitName || '—')})</option>`).join('')}</select>`;
     const models = await loadMachineList();
-    openModal(`<h2>📁 Add old machine (missed earlier)</h2><p class="small">Added as already assembled, with its times. It counts in the scoreboard and incentive of that month.</p>
+    openModal(`<h2>📁 Add old machine (missed earlier)</h2><p class="small">Added as already assembled and put in the godown. Team leader, installation person and helper are optional – with a team leader it counts in the scoreboard and incentive of the month of its end time (times then compulsory).</p>
       <label>Unit *</label><select name="unitId">${A().units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models3" required></div><div><label>Quantity</label><input name="qty" type="number" min="1" max="50" value="1"></div></div>
       <datalist id="asm-models3">${models.map((m) => `<option value="${esc(typeof m === 'string' ? m : m.label)}"></option>`).join('')}</datalist>
-      ${sel('leaderId', ['leader'], '👷 Team leader *')}${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
+      ${sel('leaderId', ['leader'], '👷 Team leader (optional)')}${sel('installerId', ['installer', 'both'], '🔧 Installation person')}${sel('helperId', ['helper', 'both'], '🧰 Helper')}
       ${asmTimesForm({}, '', true)}
       ${asmLocationFields()}
       <label>Note</label><input name="note" placeholder="optional">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
-    async (fd) => { await api('/admin/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...asmTimesValue(), ...locationValue() } }); toast('Old machine added'); renderAdmin(); });
+    async (fd) => {
+      // times are needed only when a team leader is chosen
+      let times = {};
+      try { times = asmTimesValue(); } catch (ex) { if (fd.get('leaderId')) throw ex; }
+      await api('/admin/assembly/old', { method: 'POST', body: { ...Object.fromEntries(fd), ...times, ...locationValue() } }); toast('Old machine added'); renderAdmin();
+    });
     bindLocation();
   };
   await drawBoard(state.asmMonth || monthNow(), s.maxPending, renderAdmin);
