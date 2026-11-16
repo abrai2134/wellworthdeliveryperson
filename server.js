@@ -73,6 +73,7 @@ const today = () => todayIn(db().settings.timezone);
 function changed() {
   S.repairFrom(db(), today());
   require('./lib/assembly').assignWaiting(db(), db().settings.timezone); // a leader may be free / back
+  require('./lib/fab').assignWaiting(db(), db().settings.timezone); // fab leaders too
   store.save();
 }
 
@@ -101,6 +102,7 @@ function findAccount(role, id) {
   if (role === 'unit') return db().units.find((u) => u.id === id && u.active && !u.deleted);
   if (role === 'staff') return db().people.find((p) => p.id === id && p.active && !p.deleted && p.passHash);
   if (role === 'dispatch') return db().dispatchers.find((d) => d.id === id && d.active && !d.deleted);
+  if (role === 'painting') return db().painters.find((d) => d.id === id && d.active && !d.deleted);
   return null;
 }
 
@@ -141,6 +143,7 @@ app.post('/api/login', (req, res) => {
   if (role === 'unit') account = db().units.find((u) => !u.deleted && u.active && (u.username || '').toLowerCase() === username);
   if (role === 'staff') account = db().people.find((p) => !p.deleted && p.active && p.passHash && (p.username || '').toLowerCase() === username);
   if (role === 'dispatch') account = db().dispatchers.find((d) => !d.deleted && d.active && (d.username || '').toLowerCase() === username);
+  if (role === 'painting') account = db().painters.find((d) => !d.deleted && d.active && (d.username || '').toLowerCase() === username);
   if (!account || !auth.verifyPassword(password, account.passHash)) {
     rec.count++;
     return res.status(401).json({ error: 'Wrong username or password' });
@@ -2001,6 +2004,225 @@ admin.delete('/dispatchers/:id', (req, res) => {
   if (!d) return res.status(404).json({ error: 'Not found' });
   d.deleted = true;
   d.active = false;
+  store.save();
+  res.json({ ok: true });
+});
+
+// ---------- Fab → Painting → Assembly ----------
+const FAB = require('./lib/fab');
+const fabAssign = () => FAB.assignWaiting(db(), db().settings.timezone);
+function fabView(m) {
+  return {
+    id: m.id, model: m.model, status: m.status, leader: personBrief(m.leaderId), helper: personBrief(m.helperId),
+    createdAt: m.createdAt, createdBy: m.createdBy || '', assignedAt: m.assignedAt || null, startedAt: m.startedAt || null,
+    completedAt: m.completedAt || null, note: m.note || '', cancelReason: m.cancelReason || '', edits: m.edits || [],
+  };
+}
+function fabAdd(body, by, creator) {
+  const model = canonModel(body.model);
+  if (!model) return { error: 'Enter the model no.' };
+  { const miss = rateMissing(model); if (miss) return { error: miss }; }
+  const qty = parseInt(body.qty, 10);
+  if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
+  const now = new Date().toISOString();
+  for (let i = 0; i < qty; i++) db().fab.push({ id: newId('fab'), model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) });
+  fabAssign();
+  store.save();
+  return { value: { id: '' } };
+}
+function fabStart(m, by) {
+  if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No fab team leader yet' : 'Already started or finished' };
+  m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by;
+  store.save();
+  return { value: m };
+}
+// Fab done → the machine is waiting to come into Painting.
+function fabDone(m, body, by) {
+  if (!FAB.PENDING.includes(m.status)) return { error: 'This machine is not in fab' };
+  const t = asmTimes(m, body, true);
+  if (t.error) return t;
+  m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
+  if (body.startedAt || body.completedAt) m.timesEditedBy = by;
+  db().painting.push({ id: newId('pnt'), fabId: m.id, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt });
+  fabAssign();
+  store.save();
+  return { value: m };
+}
+const fabFind = (req, res, ok) => {
+  const m = db().fab.find((x) => x.id === req.params.id && (!ok || ok(x)));
+  if (!m) res.status(404).json({ error: 'Machine not found' });
+  return m;
+};
+function fabSummary() {
+  const open = db().fab.filter((m) => FAB.OPEN.includes(m.status));
+  return open.map(fabView);
+}
+const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, pending: FAB.pendingOf(db(), p.id) }));
+
+// Painting: what is coming from fab, what is in painting, and the last 30 days of in / out.
+function paintingView() {
+  const P = db().painting;
+  const group = (list) => Object.values(list.reduce((o, x) => { (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt }).qty++; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {})).sort((a, b) => a.model.localeCompare(b.model));
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const hist = [];
+  for (const x of P) {
+    if (x.inAt && x.inAt >= since) hist.push({ at: x.inAt, kind: 'in', model: x.model, by: x.inBy || '', note: x.fromFab ? 'from fab' : 'added directly' });
+    if (x.outAt && x.outAt >= since) hist.push({ at: x.outAt, kind: 'out', model: x.model, by: x.outBy || '', note: 'to ' + unitName(x.toUnitId) + ' assembly' });
+  }
+  const g = {};
+  for (const h of hist) { const k = [h.at.slice(0, 16), h.kind, h.model, h.by, h.note].join('|'); (g[k] ||= { ...h, qty: 0 }).qty++; }
+  return {
+    coming: group(P.filter((x) => x.status === 'coming')),
+    inPainting: group(P.filter((x) => x.status === 'in')),
+    history: Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100),
+    units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
+  };
+}
+const painterName = (req) => (req.user.role === 'admin' ? 'admin' : req.user.account.name);
+function paintIn(body, by) {
+  const model = str(body.model, 120);
+  const qty = parseInt(body.qty, 10);
+  const list = db().painting.filter((x) => x.status === 'coming' && x.model === model).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  if (!(qty >= 1)) return { error: 'Enter the quantity' };
+  if (qty > list.length) return { error: `Only ${list.length} coming from fab` };
+  const at = new Date().toISOString();
+  for (const x of list.slice(0, qty)) { x.status = 'in'; x.inAt = at; x.inBy = by; }
+  store.save();
+  return { value: { id: '' } };
+}
+// A machine that did not come through fab (e.g. bought / old) put straight into painting.
+function paintAdd(body, by) {
+  const model = canonModel(body.model);
+  if (!model) return { error: 'Enter the model no.' };
+  { const miss = rateMissing(model); if (miss) return { error: miss }; }
+  const qty = parseInt(body.qty, 10);
+  if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
+  const at = new Date().toISOString();
+  for (let i = 0; i < qty; i++) db().painting.push({ id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: by, note: str(body.note, 200) });
+  store.save();
+  return { value: { id: '' } };
+}
+// Painted → into the chosen unit's assembly (shared between its team leaders as usual).
+function paintOut(body, by, creator) {
+  const model = str(body.model, 120);
+  const qty = parseInt(body.qty, 10);
+  const unit = liveUnit(str(body.toUnitId));
+  if (!unit) return { error: 'Choose the unit the machines go to for assembly' };
+  const list = db().painting.filter((x) => x.status === 'in' && x.model === model).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
+  if (!(qty >= 1)) return { error: 'Enter the quantity' };
+  if (qty > list.length) return { error: `Only ${list.length} in painting` };
+  const at = new Date().toISOString();
+  for (const x of list.slice(0, qty)) {
+    const m = { id: newId('asm'), unitId: unit.id, model, status: 'waiting', source: 'paint', paintId: x.id, createdAt: at, createdBy: by, creator, entryBy: `${by} (painting)`, note: str(body.note, 200) };
+    db().assembly.push(m);
+    Object.assign(x, { status: 'out', outAt: at, outBy: by, toUnitId: unit.id, asmId: m.id });
+  }
+  asmAssign();
+  store.save();
+  return { value: { id: '' } };
+}
+const paintOk = (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' }));
+const paintCreator = (req) => (req.user.role === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'painting', id: req.user.id });
+app.get('/api/painting/home', paintOk, (req, res) => res.json(paintingView()));
+app.post('/api/painting/in', paintOk, (req, res) => send(res, paintIn(req.body, painterName(req))));
+app.post('/api/painting/add', paintOk, (req, res) => send(res, paintAdd(req.body, painterName(req))));
+app.post('/api/painting/out', paintOk, (req, res) => send(res, paintOut(req.body, painterName(req), paintCreator(req))));
+
+// Fab team leader / fab helper (staff login)
+const isFab = (p) => ['fableader', 'fabhelper'].includes(p.role);
+app.get('/api/staff/fab', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (!isFab(p)) return bad(res, 'Only for the fab section');
+  const month = monthOf(req.query.month);
+  const mine = (m) => m.leaderId === p.id || m.helperId === p.id;
+  res.json({
+    isLeader: p.role === 'fableader',
+    items: db().fab.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(fabView),
+    leaders: fabLeaders(),
+    maxPending: FAB.settings(db()).maxPending,
+    month,
+    done: db().fab.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
+  });
+});
+app.post('/api/staff/fab', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fableader') return bad(res, 'Only fab team leaders can enter machines');
+  send(res, fabAdd(req.body, p.name, { role: 'staff', id: p.id }));
+});
+app.post('/api/staff/fab/:id/start', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabStart(m, req.user.account.name)); });
+app.post('/api/staff/fab/:id/done', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabDone(m, req.body, req.user.account.name)); });
+
+// Fab (admin)
+admin.get('/fab', (req, res) => {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  res.json({
+    items: fabSummary(),
+    done: db().fab.filter((m) => m.status === 'done' && (m.completedAt || '') >= since).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
+    leaders: fabLeaders(),
+    helpers: db().people.filter((p) => p.role === 'fabhelper' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name })),
+    settings: FAB.settings(db()),
+    painting: paintingView(),
+    painters: db().painters.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
+  });
+});
+admin.post('/fab', (req, res) => send(res, fabAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
+admin.post('/fab/:id/start', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabStart(m, 'admin')); });
+admin.post('/fab/:id/done', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabDone(m, req.body, 'admin')); });
+admin.post('/fab/:id/assign', (req, res) => {
+  const m = fabFind(req, res);
+  if (!m) return;
+  if (!FAB.PENDING.includes(m.status) && m.status !== 'waiting') return bad(res, 'Only machines not finished can be changed');
+  const leaderId = str(req.body.leaderId);
+  const helperId = str(req.body.helperId);
+  if (leaderId && !db().people.some((p) => p.id === leaderId && p.role === 'fableader' && !p.deleted)) return bad(res, 'Choose a fab team leader');
+  if (helperId && !db().people.some((p) => p.id === helperId && p.role === 'fabhelper' && !p.deleted)) return bad(res, 'Choose a fab helper');
+  (m.edits = m.edits || []).push({ at: new Date().toISOString(), by: 'admin', from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId, helperId } });
+  m.leaderId = leaderId || null; m.helperId = helperId || null;
+  if (m.leaderId && m.status === 'waiting') { m.status = 'assigned'; m.assignedAt = new Date().toISOString(); }
+  if (!m.leaderId) { m.status = 'waiting'; m.assignedAt = null; m.startedAt = null; }
+  store.save();
+  res.json({ ok: true });
+});
+admin.post('/fab/:id/cancel', (req, res) => {
+  const m = fabFind(req, res);
+  if (!m) return;
+  if (!FAB.OPEN.includes(m.status)) return bad(res, 'Only machines not finished can be cancelled');
+  m.status = 'cancelled'; m.cancelledAt = new Date().toISOString(); m.cancelReason = str(req.body.reason, 150);
+  fabAssign();
+  store.save();
+  res.json({ ok: true });
+});
+admin.put('/fab/settings', (req, res) => {
+  db().settings.fab = { ...FAB.settings(db()), maxPending: Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) };
+  fabAssign();
+  store.save();
+  res.json({ ok: true });
+});
+// Painting logins (admin)
+admin.post('/painters', (req, res) => {
+  const name = str(req.body.name, 80);
+  const username = norm(req.body.username);
+  const password = String(req.body.password || '');
+  if (!name) return bad(res, 'Name is required');
+  if (!/^[a-z0-9._@-]{3,40}$/.test(username)) return bad(res, 'Login ID must be 3-40 letters/numbers (no spaces)');
+  if (db().painters.some((d) => !d.deleted && d.username === username)) return bad(res, 'This login ID is already used');
+  if (password.length < 4) return bad(res, 'Password must be at least 4 characters');
+  db().painters.push({ id: newId('pnr'), name, username, passHash: auth.hashPassword(password), active: true });
+  store.save();
+  res.json({ ok: true });
+});
+admin.put('/painters/:id', (req, res) => {
+  const d = db().painters.find((x) => x.id === req.params.id && !x.deleted);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  if (req.body.active !== undefined) d.active = !!req.body.active;
+  if (req.body.password) { if (String(req.body.password).length < 4) return bad(res, 'Password must be at least 4 characters'); d.passHash = auth.hashPassword(String(req.body.password)); }
+  store.save();
+  res.json({ ok: true });
+});
+admin.delete('/painters/:id', (req, res) => {
+  const d = db().painters.find((x) => x.id === req.params.id && !x.deleted);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  d.deleted = true; d.active = false;
   store.save();
   res.json({ ok: true });
 });
