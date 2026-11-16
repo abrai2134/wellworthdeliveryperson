@@ -25,3 +25,17 @@ test('fab machines are shared between fab leaders, each with a fab helper, up to
 test('fab people are never picked for deliveries or loading', () => {
   assert.ok(S.ROLES.includes('fableader') && S.ROLES.includes('fabhelper'));
 });
+
+test('fab machines go only to fab leaders and helpers of their own unit', () => {
+  const db = defaults();
+  db.units.push({ id: 'u1', name: '814', active: true }, { id: 'u2', name: '816', active: true });
+  db.people.push(
+    { id: 'A', name: 'Fab 814', role: 'fableader', unitId: 'u1', active: true },
+    { id: 'B', name: 'Fab 816', role: 'fableader', unitId: 'u2', active: true },
+    { id: 'HA', name: 'Help 814', role: 'fabhelper', unitId: 'u1', active: true },
+    { id: 'HB', name: 'Help 816', role: 'fabhelper', unitId: 'u2', active: true },
+  );
+  for (let i = 0; i < 4; i++) db.fab.push({ id: 'x' + i, unitId: 'u2', model: 'X', status: 'waiting', createdAt: String(i) });
+  FAB.assignWaiting(db, 'Asia/Kolkata');
+  assert.ok(db.fab.every((m) => m.leaderId === 'B' && m.helperId === 'HB'));
+});

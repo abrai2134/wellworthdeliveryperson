@@ -2366,13 +2366,13 @@ function fabRow(m, who) {
   if (canWork && (m.status === 'assigned' || m.status === 'started')) btns.push(`<button class="small primary" data-fab-done="${esc(m.id)}">✓ Fab done</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-fab-assign="${esc(m.id)}">Change people</button><button class="small danger" data-fab-cancel="${esc(m.id)}">Cancel</button>`);
   const when = m.status === 'done' ? 'done ' + fmtTime(m.completedAt) : m.status === 'started' ? 'started ' + ageText(m.startedAt) : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : 'given ' + ageText(m.assignedAt);
-  return `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${esc(team)}</span><span class="small muted">added ${esc(fmtTime(m.createdAt))} by ${esc(m.createdBy)}</span></span>
+  return `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${m.unitName ? '🏢 ' + esc(m.unitName) + ' · ' : ''}${esc(team)}</span><span class="small muted">added ${esc(fmtTime(m.createdAt))} by ${esc(m.createdBy)}</span></span>
     <span class="dr-side small"><span class="badge ${cls}">${esc(label)}</span><br>${esc(when)}</span>${btns.length ? `<span class="row" style="gap:4px">${btns.join('')}</span>` : ''}</div>`;
 }
 function fabSummaryHtml(items) {
   const g = {};
   for (const m of items) {
-    const n = m.leader ? m.leader.name : '⏳ Waiting';
+    const n = (m.unitName ? m.unitName + ' – ' : '') + (m.leader ? m.leader.name : '⏳ Waiting');
     const r = ((g[n] ||= {})[m.model] ||= { given: 0, started: 0 });
     if (m.status === 'started') r.started++; else r.given++;
   }
@@ -2381,16 +2381,17 @@ function fabSummaryHtml(items) {
   const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td></tr>`));
   return `<div class="card section"><h3 style="margin-top:0">📦 Fab – given to each fab leader</h3><div class="table-wrap"><table><thead><tr><th>Fab leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">In fab</th></tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
 }
-function fabAddForm(url, reload) {
+function fabAddForm(url, reload, units, myUnit) {
   return async () => {
     const models = await loadMachineList();
     openModal(`<h2>🏭 Machines for fab</h2>
+      <label>Unit *</label><select name="unitId" required>${myUnit ? '' : '<option value="">— choose —</option>'}${units.map((u) => `<option value="${esc(u.id)}" ${u.id === myUnit ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-fab" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
       <datalist id="asm-models-fab">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
       <label>Note</label><input name="note" placeholder="optional">
-      <p class="muted small">Each machine goes to the fab leader with the fewest machines open, with one fab helper. When fab is done it goes to Painting.</p>
+      <p class="muted small">Each machine goes to the fab leader <b>of that unit</b> with the fewest machines open, with one fab helper of that unit. When fab is done it goes to Painting.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
-    async (fd) => { await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
+    async (fd) => { if (!fd.get('unitId')) throw new Error('Choose the unit'); await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
   };
 }
 function bindFab(root, base, items, reload, people) {
@@ -2425,7 +2426,7 @@ function paintingHtml(v) {
   return `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span></div>
       <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span><button class="small" id="paint-add">+ Machine in (not from fab)</button></div>
-      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}">⬆ Out</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
     ${v.history.length ? `<div class="card section"><h2>Painting in / out (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th></th><th>Model no.</th><th class="num">Qty</th><th>By</th><th></th></tr></thead><tbody>
       ${v.history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${h.kind === 'in' ? '⬇ In' : '⬆ Out'}</td><td>${esc(h.model)}</td><td class="num"><b>${h.qty}</b></td><td class="small">${esc(h.by)}</td><td class="small muted">${esc(h.note)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
 }
@@ -2438,9 +2439,9 @@ function bindPainting(root, v, reload) {
     async (fd) => { await api('/painting/in', { method: 'POST', body: { model, qty: fd.get('qty') } }); toast('Taken into painting'); reload(); });
   }));
   root.querySelectorAll('[data-paint-out]').forEach((b) => (b.onclick = () => {
-    const [model, max] = b.dataset.paintOut.split('|');
+    const [model, max, unit] = b.dataset.paintOut.split('|');
     openModal(`<h2>⬆ Out of painting → assembly</h2><div class="muted">⚙️ ${esc(model)} · ${max} in painting</div>
-      <label>Send to unit for assembly *</label><select name="toUnitId" required><option value="">— choose —</option>${v.units.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+      <label>Send to unit for assembly *</label><select name="toUnitId" required><option value="">— choose —</option>${v.units.map((u) => `<option value="${esc(u.id)}" ${u.id === unit ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
       <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="1" required>
       <p class="small muted">They go into that unit's assembly and are shared between its team leaders.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬆ Out</button></div>`,
@@ -2482,7 +2483,7 @@ async function renderFabStaff() {
       ${r.done.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Done</th><th>Model no.</th><th>Fab leader</th><th>Helper</th></tr></thead><tbody>${r.done.map((m, i) => `<tr><td>${i + 1}</td><td class="small">${esc(fmtTime(m.completedAt))}</td><td>${esc(m.model)}</td><td>${esc(m.leader ? m.leader.name : '')}</td><td>${esc(m.helper ? m.helper.name : '')}</td></tr>`).join('')}<tr><td></td><td colspan="4"><b>Total – ${r.done.length}</b></td></tr></tbody></table></div>` : '<p class="muted small">Nothing done in this month.</p>'}</div>`;
   bindFab(wrap, '/staff/fab', r.items, renderStaff, null);
   const add = document.getElementById('fab-add');
-  if (add) add.onclick = fabAddForm('/staff/fab', renderStaff);
+  if (add) add.onclick = fabAddForm('/staff/fab', renderStaff, r.units, r.unitId);
   document.getElementById('fab-month').onchange = (e) => { state.fabMonth = e.target.value; renderStaff(); };
 }
 
@@ -2491,7 +2492,7 @@ async function adminFab(main) {
   const r = await api('/admin/fab');
   const fabLeads = A().people.filter((p) => p.role === 'fableader');
   const fabHelps = A().people.filter((p) => p.role === 'fabhelper');
-  const person = (p) => `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b>${p.active ? '' : ' <span class="badge">inactive</span>'} ${p.role === 'fableader' ? (p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>') : ''}</div><div class="sub-line small">${p.role === 'fableader' ? `<span class="muted">${(r.leaders.find((l) => l.id === p.id) || { pending: 0 }).pending} pending</span>` : ''}<button class="link small" data-edit-fp="${esc(p.id)}">Edit</button></div></div>`;
+  const person = (p) => `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b> <span class="small muted">${esc(p.unitName || '')}</span>${p.active ? '' : ' <span class="badge">inactive</span>'} ${p.role === 'fableader' ? (p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>') : ''}</div><div class="sub-line small">${p.role === 'fableader' ? `<span class="muted">${(r.leaders.find((l) => l.id === p.id) || { pending: 0 }).pending} pending</span>` : ''}<button class="link small" data-edit-fp="${esc(p.id)}">Edit</button></div></div>`;
   main.innerHTML = `<div class="row section"><h1 style="margin:0">🏭 Fab</h1><div class="spacer"></div><button class="primary" id="fab-add">+ Machines for fab</button></div>
     <div class="grid section">
       <div class="card"><div class="row"><h3 style="margin:0">🏭 Fab team leaders</h3><div class="spacer"></div><button class="small" id="fab-add-leader">+ Add</button></div>${fabLeads.map(person).join('') || '<div class="small muted">None yet – add one (give a PIN so they can log in).</div>'}</div>
@@ -2509,7 +2510,7 @@ async function adminFab(main) {
   const reload = () => renderAdmin();
   bindFab(main, '/admin/fab', [...r.items, ...r.done], reload, r);
   bindPainting(main.querySelector('#adm-paint'), r.painting, reload);
-  document.getElementById('fab-add').onclick = fabAddForm('/admin/fab', reload);
+  document.getElementById('fab-add').onclick = fabAddForm('/admin/fab', reload, A().units.filter((u) => u.active), null);
   document.getElementById('fab-add-leader').onclick = () => personForm(null, null, 'fableader');
   document.getElementById('fab-add-helper').onclick = () => personForm(null, null, 'fabhelper');
   main.querySelectorAll('[data-edit-fp]').forEach((b) => (b.onclick = () => personForm(personOf(b.dataset.editFp))));

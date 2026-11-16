@@ -2013,19 +2013,21 @@ const FAB = require('./lib/fab');
 const fabAssign = () => FAB.assignWaiting(db(), db().settings.timezone);
 function fabView(m) {
   return {
-    id: m.id, model: m.model, status: m.status, leader: personBrief(m.leaderId), helper: personBrief(m.helperId),
+    id: m.id, model: m.model, status: m.status, unitId: m.unitId || null, unitName: unitName(m.unitId), leader: personBrief(m.leaderId), helper: personBrief(m.helperId),
     createdAt: m.createdAt, createdBy: m.createdBy || '', assignedAt: m.assignedAt || null, startedAt: m.startedAt || null,
     completedAt: m.completedAt || null, note: m.note || '', cancelReason: m.cancelReason || '', edits: m.edits || [],
   };
 }
 function fabAdd(body, by, creator) {
+  const unit = liveUnit(str(body.unitId));
+  if (!unit) return { error: 'Choose the unit – fab is shared only between that unit\'s fab leaders' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   { const miss = rateMissing(model); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const now = new Date().toISOString();
-  for (let i = 0; i < qty; i++) db().fab.push({ id: newId('fab'), model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) });
+  for (let i = 0; i < qty; i++) db().fab.push({ id: newId('fab'), unitId: unit.id, model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) });
   fabAssign();
   store.save();
   return { value: { id: '' } };
@@ -2043,7 +2045,7 @@ function fabDone(m, body, by) {
   if (t.error) return t;
   m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
   if (body.startedAt || body.completedAt) m.timesEditedBy = by;
-  db().painting.push({ id: newId('pnt'), fabId: m.id, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt });
+  db().painting.push({ id: newId('pnt'), fabId: m.id, unitId: m.unitId || null, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt });
   fabAssign();
   store.save();
   return { value: m };
@@ -2057,12 +2059,12 @@ function fabSummary() {
   const open = db().fab.filter((m) => FAB.OPEN.includes(m.status));
   return open.map(fabView);
 }
-const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, pending: FAB.pendingOf(db(), p.id) }));
+const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
 
 // Painting: what is coming from fab, what is in painting, and the last 30 days of in / out.
 function paintingView() {
   const P = db().painting;
-  const group = (list) => Object.values(list.reduce((o, x) => { (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt }).qty++; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {})).sort((a, b) => a.model.localeCompare(b.model));
+  const group = (list) => Object.values(list.reduce((o, x) => { (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {} }).qty++; if (x.unitId) o[x.model].units[x.unitId] = (o[x.model].units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {})).sort((a, b) => a.model.localeCompare(b.model));
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   const hist = [];
   for (const x of P) {
@@ -2140,6 +2142,8 @@ app.get('/api/staff/fab', need('staff'), (req, res) => {
     items: db().fab.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(fabView),
     leaders: fabLeaders(),
     maxPending: FAB.settings(db()).maxPending,
+    unitId: p.unitId,
+    units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
     month,
     done: db().fab.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
   });
@@ -2147,7 +2151,7 @@ app.get('/api/staff/fab', need('staff'), (req, res) => {
 app.post('/api/staff/fab', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'fableader') return bad(res, 'Only fab team leaders can enter machines');
-  send(res, fabAdd(req.body, p.name, { role: 'staff', id: p.id }));
+  send(res, fabAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
 });
 app.post('/api/staff/fab/:id/start', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabStart(m, req.user.account.name)); });
 app.post('/api/staff/fab/:id/done', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabDone(m, req.body, req.user.account.name)); });
@@ -2159,7 +2163,7 @@ admin.get('/fab', (req, res) => {
     items: fabSummary(),
     done: db().fab.filter((m) => m.status === 'done' && (m.completedAt || '') >= since).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
     leaders: fabLeaders(),
-    helpers: db().people.filter((p) => p.role === 'fabhelper' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name })),
+    helpers: db().people.filter((p) => p.role === 'fabhelper' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId) })),
     settings: FAB.settings(db()),
     painting: paintingView(),
     painters: db().painters.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
