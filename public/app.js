@@ -123,7 +123,7 @@ function bindLogout() {
 
 // ---------- login ----------
 function renderLogin(role = localStorageGet('role') || 'unit') {
-  const labels = { dispatch: 'Dispatch login ID', painting: 'Painting login ID', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders, fab – as given by admin)', admin: 'Admin username' };
+  const labels = { dispatch: 'Dispatch login ID', painting: 'Painting login ID', fab: 'Fab login ID (fab team leader / fab helper)', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders, fab – as given by admin)', admin: 'Admin username' };
   $app.innerHTML = `<div class="login">
     <div class="brand"><div class="logo">🚚</div><h1>${esc(state.pub.orgName)}</h1><div class="muted">Delivery helpers &amp; installation team</div></div>
     <div class="card">
@@ -131,13 +131,14 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
         <button type="button" data-role="unit" class="${role === 'unit' ? 'on' : ''}"><span>🏢</span>Unit</button>
         <button type="button" data-role="staff" class="${role === 'staff' ? 'on' : ''}"><span>🧰</span>Helper / Team leader</button>
         <button type="button" data-role="dispatch" class="${role === 'dispatch' ? 'on' : ''}"><span>🚚</span>Dispatch</button>
+        <button type="button" data-role="fab" class="${role === 'fab' ? 'on' : ''}"><span>🏭</span>Fab</button>
         <button type="button" data-role="painting" class="${role === 'painting' ? 'on' : ''}"><span>🎨</span>Painting</button>
         <button type="button" data-role="admin" class="${role === 'admin' ? 'on' : ''}"><span>🔑</span>Admin</button>
       </div>
       <form id="login-form">
         <label>${labels[role]}</label>
         <input name="username" autocomplete="username" autocapitalize="none" required>
-        <label>Password${role === 'staff' ? ' / PIN' : ''}</label>
+        <label>Password${role === 'staff' || role === 'fab' ? ' / PIN' : ''}</label>
         <input name="password" type="password" autocomplete="current-password" required>
         <button class="primary" type="submit">Log in</button>
       </form>
@@ -153,7 +154,8 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
     const old = form.querySelector('.error');
     if (old) old.remove();
     try {
-      await api('/login', { method: 'POST', body: { role, username: fd.get('username'), password: fd.get('password') } });
+      // fab team leaders / helpers are people (staff) with a fab role
+      await api('/login', { method: 'POST', body: { role: role === 'fab' ? 'staff' : role, username: fd.get('username'), password: fd.get('password') } });
       state.me = await api('/me');
       state.tab = 'today';
       render();
