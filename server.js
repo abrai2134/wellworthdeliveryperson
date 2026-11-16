@@ -2028,7 +2028,7 @@ const fabRates = () => (FAB.settings(db()).contractorRates || []);
 const fabRateOf = (model) => { const r = fabRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.rate) || 0) : null; };
 function fabRateMissing(model) {
   if (!model || fabRateOf(model) !== null) return '';
-  return `No fab contractor rate is set for model "${model}". Pick the exact model name from the list – fab entry is allowed only for models that have a fab rate. The admin adds it in 🏭 Fab & Painting → Fab contractor rate per model.`;
+  return `No fab contractor rate is set for model "${model}". Pick the exact model name from the list – fab entry is allowed only for models that have a fab rate. The fab manager (💰 Fab rates) or the admin (🏭 Fab & Painting) must add its rate first.`;
 }
 // Fab board for a month: machines done per fab leader and the contractor amount.
 function fabBoard(month) {
@@ -2226,6 +2226,24 @@ app.post('/api/staff/fab', need('staff'), (req, res) => {
   if (!['fableader', 'fabmanager'].includes(p.role)) return bad(res, 'Only fab team leaders / fab managers can enter machines');
   send(res, fabAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
 });
+// Fab manager: see the fab rates and add a rate for a NEW model (changing a rate is admin only).
+app.get('/api/staff/fab/rates', need('staff'), (req, res) => {
+  if (req.user.account.role !== 'fabmanager') return bad(res, 'Only the fab manager');
+  res.json({ rates: fabRates() });
+});
+app.post('/api/staff/fab/rates', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager can add fab rates');
+  const model = canonModel(req.body.model);
+  if (!model) return bad(res, 'Enter the model no.');
+  if (fabRates().some((x) => ASM.sameRate(x.model, model))) return bad(res, 'This model already has a fab rate – only the admin can change it');
+  const rate = Math.max(0, Math.min(100000, Math.round(Number(req.body.rate) || 0)));
+  if (!rate) return bad(res, 'Enter the rate ₹');
+  const cur = FAB.settings(db());
+  db().settings.fab = { ...cur, contractorRates: [...(cur.contractorRates || []), { model, rate, addedBy: p.name, addedAt: new Date().toISOString() }] };
+  store.save();
+  res.json({ ok: true, model });
+});
 app.post('/api/staff/fab/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager can give machines to fab leaders');
@@ -2338,7 +2356,7 @@ admin.put('/fab/settings', (req, res) => {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
     contractorRates: Array.isArray(req.body.contractorRates)
-      ? req.body.contractorRates.map((x) => ({ model: canonModel(x && x.model), rate: money(x && x.rate) })).filter((x) => x.model).slice(0, 300)
+      ? req.body.contractorRates.map((x) => { const model = canonModel(x && x.model); const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model)); return { model, rate: money(x && x.rate), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {}) }; }).filter((x) => x.model).slice(0, 300)
       : cur.contractorRates || [],
   };
   fabAssign();

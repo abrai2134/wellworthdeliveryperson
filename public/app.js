@@ -2571,7 +2571,7 @@ async function renderFabStaff() {
   const mine = r.items.filter((m) => (m.leader && m.leader.id === state.me.id) || (m.helper && m.helper.id === state.me.id));
   wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(state.today || new Date().toISOString().slice(0, 10)))}</div><div class="big">🏭 Fab – ${r.isManager ? 'manager' : r.isLeader ? 'team leader' : 'helper'}</div>
       <div class="line">${r.isManager ? `Give each machine to a fab leader (Change fab leader). Fab leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : r.isLeader ? 'Tap ▶ Start when you begin a machine and ✓ Fab done when it is finished – it then goes to Painting.' : 'Your fab machines.'}</div></div>
-    <div class="row section"><h2 style="margin:0">${r.isManager ? '🏭 Unit fab machines' : '🏭 My fab work'}</h2><div class="spacer"></div>${r.isManager ? '<button class="primary small" id="fab-add">+ Machines for fab</button>' : ''}${r.isLeader ? `<span class="badge w4">${mine.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> <button class="primary small" id="fab-add">+ Machines for fab</button>` : ''}</div>
+    <div class="row section"><h2 style="margin:0">${r.isManager ? '🏭 Unit fab machines' : '🏭 My fab work'}</h2><div class="spacer"></div>${r.isManager ? '<button class="small" id="fab-rates-btn">💰 Fab rates</button> <button class="primary small" id="fab-add">+ Machines for fab</button>' : ''}${r.isLeader ? `<span class="badge w4">${mine.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> <button class="primary small" id="fab-add">+ Machines for fab</button>` : ''}</div>
     ${fabSummaryHtml(r.items, r.isManager ? '/staff/fab/move' : null)}
     ${r.items.length ? fabGrouped(r.items, who) : '<div class="card muted">No fab machine for you right now.</div>'}
     <div class="card section"><div class="row"><h3 style="margin:0">✓ ${r.isManager ? 'Fab done' : 'My fab done'} – ${esc(r.month)}${r.myAmount !== null && r.myAmount !== undefined ? ` · <span class="badge ok">₹${r.myAmount}</span>` : ''}</h3><div class="spacer"></div><input type="month" id="fab-month" value="${esc(r.month)}" style="width:auto"></div>
@@ -2579,6 +2579,19 @@ async function renderFabStaff() {
   bindFab(wrap, '/staff/fab', r.items, renderStaff, { leaders: r.unitLeaders, helpers: r.unitHelpers });
   const add = document.getElementById('fab-add');
   if (add) add.onclick = fabAddForm('/staff/fab', renderStaff, r.units, r.unitId);
+  // fab manager: rate list + add a rate for a new model
+  const ratesBtn = document.getElementById('fab-rates-btn');
+  if (ratesBtn) ratesBtn.onclick = async () => {
+    const [rt, models] = await Promise.all([api('/staff/fab/rates'), loadMachineList()]);
+    openModal(`<h2>💰 Fab contractor rates</h2>
+      <details><summary class="small"><b>Rates (${rt.rates.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Rate ₹</th></tr></thead><tbody>
+        ${rt.rates.map((x) => `<tr><td>${esc(x.model)}${x.addedBy ? ` <span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}</td><td class="num">${x.rate}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No rate yet.</td></tr>'}</tbody></table></div></details>
+      <h3 style="margin-top:12px">Add a new model</h3><p class="small muted">Only models without a rate can be added here. Existing rates are changed by the admin.</p>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-fm" required></div><div><label>Rate ₹ *</label><input name="rate" type="number" min="1" required></div></div>
+      <datalist id="asm-models-fm">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      <div class="actions"><button value="cancel">Close</button><button class="primary" value="ok">Add rate</button></div>`,
+    async (fd) => { const x = await api('/staff/fab/rates', { method: 'POST', body: Object.fromEntries(fd) }); toast(`Rate added for ${x.model}`); renderStaff(); });
+  };
   document.getElementById('fab-month').onchange = (e) => { state.fabMonth = e.target.value; renderStaff(); };
 }
 
@@ -2666,7 +2679,7 @@ async function adminFab(main) {
     const div = document.createElement('div');
     div.className = 'row fr-row';
     div.style.cssText = 'margin-top:6px;flex-wrap:nowrap';
-    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>Rate ₹</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:90px"><button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
+    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>Rate ₹</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:90px">${x.addedBy ? `<span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
     div.querySelector('.fr-del').onclick = () => div.remove();
     div.querySelector('.fr-copy').onclick = () => addFr({ model: '', rate: div.querySelector('.fr-r').value }, div);
     if (after) after.after(div); else frRows.appendChild(div);
