@@ -123,7 +123,7 @@ function bindLogout() {
 
 // ---------- login ----------
 function renderLogin(role = localStorageGet('role') || 'unit') {
-  const labels = { dispatch: 'Dispatch login ID', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders – as given by admin)', admin: 'Admin username' };
+  const labels = { dispatch: 'Dispatch login ID', painting: 'Painting login ID', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders, fab – as given by admin)', admin: 'Admin username' };
   $app.innerHTML = `<div class="login">
     <div class="brand"><div class="logo">🚚</div><h1>${esc(state.pub.orgName)}</h1><div class="muted">Delivery helpers &amp; installation team</div></div>
     <div class="card">
