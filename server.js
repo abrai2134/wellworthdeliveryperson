@@ -190,6 +190,7 @@ function personView(p) {
     username: p.username || '',
     canLogin: !!p.passHash,
     active: !!p.active,
+    payType: p.payType || '',
   };
 }
 
@@ -844,7 +845,8 @@ function readPerson(body, existing) {
     }
   }
   return {
-    value: { name, phone, username, role, unitId, backup: !!body.backup, active: body.active !== false },
+    // Contractor (paid per production) or Payroll (gets incentive) – used for rates later
+    value: { name, phone, username, role, unitId, backup: !!body.backup, active: body.active !== false, payType: ['contractor', 'payroll'].includes(str(body.payType)) ? str(body.payType) : '' },
     password,
   };
 }
@@ -2232,6 +2234,37 @@ function fabSetPeople(m, body, by) {
   store.save();
   return { value: m };
 }
+// ⇄ Move: not-started fab machines of one model from one fab leader to another (same unit).
+function fabMove(body, by, unitId) {
+  const from = str(body.fromLeaderId);
+  const to = str(body.toLeaderId);
+  const model = str(body.model, 120);
+  if (!to || to === from) return { error: 'Choose the fab leader to move them to' };
+  const toP = db().people.find((p) => p.id === to && p.role === 'fableader' && p.active && !p.deleted);
+  if (!toP) return { error: 'Choose a fab team leader' };
+  const list = db().fab.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+  if (!list.length) return { error: 'No machine of this model is waiting to start with that fab leader' };
+  if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a fab leader of the same unit' };
+  const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
+  const at = new Date().toISOString();
+  for (const m of list.slice(0, qty)) {
+    (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId: to } });
+    m.leaderId = to; m.assignedAt = at; m.manual = true;
+    m.helperId = null; // a helper of the new leader's unit is picked again
+  }
+  fabAssign();
+  store.save();
+  return { value: { id: '', moved: qty } };
+}
+admin.post('/fab/move', (req, res) => { const r = fabMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
+unit.post('/fab/move', (req, res) => { const r = fabMove(req.body, (req.user.account.name || req.user.account.username) + ' (unit)', req.user.id); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
+app.post('/api/staff/fab/move', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager can move machines');
+  const r = fabMove(req.body, p.name + ' (fab manager)', p.unitId);
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r.value });
+});
 admin.post('/fab/:id/assign', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabSetPeople(m, req.body, 'admin')); });
 // Unit login: its own fab – enter machines and share them between its fab leaders.
 const unitFabPeople = (unitId, role) => db().people.filter((p) => p.role === role && p.active && !p.deleted && p.unitId === unitId).map((p) => ({ id: p.id, name: p.name, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
