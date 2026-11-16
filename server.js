@@ -2164,27 +2164,37 @@ app.post('/api/painting/add', paintOk, (req, res) => send(res, paintAdd(req.body
 app.post('/api/painting/out', paintOk, (req, res) => send(res, paintOut(req.body, painterName(req), paintCreator(req))));
 
 // Fab team leader / fab helper (staff login)
-const isFab = (p) => ['fableader', 'fabhelper'].includes(p.role);
+const isFab = (p) => ['fableader', 'fabhelper', 'fabmanager'].includes(p.role);
 app.get('/api/staff/fab', need('staff'), (req, res) => {
   const p = req.user.account;
   if (!isFab(p)) return bad(res, 'Only for the fab section');
   const month = monthOf(req.query.month);
   const mine = (m) => m.leaderId === p.id || m.helperId === p.id;
+  const manager = p.role === 'fabmanager'; // distributes the unit's fab machines between its fab leaders
   res.json({
     isLeader: p.role === 'fableader',
-    items: db().fab.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(fabView),
+    isManager: manager,
+    items: db().fab.filter((m) => FAB.OPEN.includes(m.status) && (manager ? m.unitId === p.unitId : mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(fabView),
+    unitLeaders: unitFabPeople(p.unitId, 'fableader'),
+    unitHelpers: unitFabPeople(p.unitId, 'fabhelper'),
     leaders: fabLeaders(),
     maxPending: FAB.settings(db()).maxPending,
     unitId: p.unitId,
     units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
     month,
-    done: db().fab.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
+    done: db().fab.filter((m) => m.status === 'done' && (manager ? m.unitId === p.unitId : mine(m)) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
   });
 });
 app.post('/api/staff/fab', need('staff'), (req, res) => {
   const p = req.user.account;
-  if (p.role !== 'fableader') return bad(res, 'Only fab team leaders can enter machines');
+  if (!['fableader', 'fabmanager'].includes(p.role)) return bad(res, 'Only fab team leaders / fab managers can enter machines');
   send(res, fabAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
+});
+app.post('/api/staff/fab/:id/assign', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager can give machines to fab leaders');
+  const m = fabFind(req, res, (x) => x.unitId === p.unitId);
+  if (m) send(res, fabSetPeople(m, req.body, p.name + ' (fab manager)'));
 });
 app.post('/api/staff/fab/:id/start', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabStart(m, req.user.account.name)); });
 app.post('/api/staff/fab/:id/done', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabDone(m, req.body, req.user.account.name)); });
