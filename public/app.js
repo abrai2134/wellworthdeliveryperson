@@ -1975,7 +1975,13 @@ async function adminAssembly(main) {
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
   bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
   document.getElementById('add-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
-  api('/dispatch/board').then((b) => { const box = document.getElementById('adm-dsp-board'); if (box) box.innerHTML = dispatchBoardHtml(b.board, monthNow(), false); });
+  api('/dispatch/board').then((b) => {
+    const box = document.getElementById('adm-dsp-board');
+    if (!box) return;
+    box.innerHTML = dispatchBoardHtml(b.board, monthNow(), false) + ((b.missing || []).length ? `<div class="card section" style="border-color:#f3c0c0"><b>⚠ Sent to clients without a dispatch rate (₹0)</b>
+      <div class="small muted">Add these exact model names in <i>Dispatch incentive per model</i> below and save – the incentive is then added to these dispatches automatically.</div>
+      <ul class="small" style="margin:6px 0 0 18px">${b.missing.map((x) => `<li><b>${esc(x.model)}</b> × ${x.qty} <span class="muted">(${esc(x.by)})</span></li>`).join('')}</ul></div>` : '');
+  });
   document.getElementById('dsp-add').onclick = () => openModal(`<h2>+ Dispatch login</h2>
       <label>Name *</label><input name="name" required>
       <div class="form-grid"><div><label>Login ID *</label><input name="username" autocapitalize="none" required placeholder="e.g. dispatch1"></div><div><label>Password *</label><input name="password" required></div></div>
@@ -2126,7 +2132,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${x.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(x.at + ':00Z'))}</span>` : ''}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="small">${m.booked.map((x) => `<span class="badge warn">👤 booked: ${esc(x.party)} × ${x.qty}</span>`).join(' ')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}" data-norate="${m.noDispatchRate ? 1 : ''}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
@@ -2230,7 +2236,7 @@ function bindSend(root, url, units, reload) {
       <label>Quantity *</label><input name="qty" type="number" min="1" max="${max}" value="1" required>
       <label>Send to *</label>
       <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
-      <div id="s-client" class="lookup"><label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
+      <div id="s-client" class="lookup">${b.dataset.norate ? '<div class="error" style="margin:6px 0">⚠ No dispatch incentive is set for this model – you get ₹0 for it until the admin adds its rate (exact model name).</div>' : ''}<label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
         <div class="small muted">You get the dispatch incentive for each machine sent to a client.</div></div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
         <div class="small muted">Moves to that unit's godown (a booked machine stays booked for its client).</div></div>

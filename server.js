@@ -1688,6 +1688,7 @@ app.post('/api/staff/assembly/incentives', need('staff'), (req, res) => {
     s.incentives = [...(s.incentives || []), { model, leader: money(req.body.leader), installer: money(req.body.installer), ...stamp }];
   }
   db().settings.assembly = s;
+  refreshDispatchIncentives();
   store.save();
   res.json({ ok: true });
 });
@@ -1714,6 +1715,7 @@ admin.put('/assembly/settings', (req, res) => {
       ? b.incentives.map((x) => ({ model: canonModel(x && x.model), leader: money(x && x.leader), installer: money(x && x.installer), ...addedBy(cur.incentives, x) })).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
+  refreshDispatchIncentives();
   asmAssign();
   store.save();
   res.json({ ok: true });
@@ -1816,10 +1818,34 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
 // Dispatch money is for the admin and dispatch logins only (not team leaders / units).
+// Machines sent to a client from a Dispatch login while their model had no dispatch rate got ₹0.
+// When the rate is added later (exact model name), they get it: last 2 months.
+function refreshDispatchIncentives() {
+  const since = new Date(Date.now() - 62 * 86400000).toISOString();
+  let n = 0;
+  for (const m of db().assembly) {
+    const d = m.dispatchIncentive;
+    if (m.location !== 'dispatched' || !d || !d.dispatcherId || d.amount || (m.dispatchedAt || '') < since) continue;
+    const amount = ASM.incentiveFor(db(), m.model).dispatch;
+    if (amount > 0) { d.amount = amount; d.rateAddedLater = true; n++; }
+  }
+  return n;
+}
+if (refreshDispatchIncentives()) store.save();
+// Client dispatches in a month whose model has no dispatch rate (₹0), per model.
+function dispatchMissingRates(month) {
+  const g = {};
+  for (const m of db().assembly) {
+    const d = m.dispatchIncentive;
+    if (m.location === 'dispatched' && d && d.dispatcherId && !d.amount && (m.dispatchedAt || '').slice(0, 7) === month) (g[m.model] ||= { model: m.model, qty: 0, by: new Set() }).qty++, g[m.model].by.add(d.name);
+  }
+  return Object.values(g).map((x) => ({ model: x.model, qty: x.qty, by: [...x.by].join(', ') }));
+}
 app.get('/api/dispatch/board', (req, res) => {
   if (!req.user || !['admin', 'dispatch'].includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
-  const board = ASM.dispatchBoard(db(), monthOf(req.query.month));
-  res.json({ board });
+  const month = monthOf(req.query.month);
+  const board = ASM.dispatchBoard(db(), month);
+  res.json({ board, missing: req.user.role === 'admin' ? dispatchMissingRates(month) : [] });
 });
 admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
