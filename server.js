@@ -74,6 +74,7 @@ function changed() {
   S.repairFrom(db(), today());
   require('./lib/assembly').assignWaiting(db(), db().settings.timezone); // a leader may be free / back
   require('./lib/fab').assignWaiting(db(), db().settings.timezone); // fab leaders too
+  if (typeof refreshFabAmounts === 'function') refreshFabAmounts(); // a fab leader may now be Contractor
   store.save();
 }
 
@@ -2030,6 +2031,19 @@ function fabRateMissing(model) {
   if (!model || fabRateOf(model) !== null) return '';
   return `No fab contractor rate is set for model "${model}". Pick the exact model name from the list – fab entry is allowed only for models that have a fab rate. The fab manager (💰 Fab rates) or the admin (🏭 Fab & Painting) must add its rate first.`;
 }
+// Fab done while the model had no rate, or before the leader was set as Contractor: ₹0 was saved.
+// Fill it in once the rate / type exist (last 2 months; an amount already earned is never changed).
+function refreshFabAmounts() {
+  const since = new Date(Date.now() - 62 * 86400000).toISOString();
+  let n = 0;
+  for (const m of db().fab) {
+    if (m.status !== 'done' || m.contractorAmount || (m.completedAt || '') < since) continue;
+    const leader = db().people.find((p) => p.id === m.leaderId);
+    const rate = fabRateOf(m.model);
+    if (leader && leader.payType === 'contractor' && rate > 0) { m.fabRate = rate; m.contractorAmount = rate; m.rateAddedLater = true; n++; }
+  }
+  return n;
+}
 // Fab board for a month: machines done per fab leader and the contractor amount.
 function fabBoard(month) {
   const done = db().fab.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
@@ -2191,6 +2205,7 @@ admin.post('/assembly/allocate', (req, res) => {
   if (r.error) return bad(res, r.error);
   res.json({ ok: true, ...r.value });
 });
+if (refreshFabAmounts()) store.save(); // on start
 const paintOk = (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' }));
 const paintCreator = (req) => (req.user.role === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'painting', id: req.user.id });
 app.get('/api/painting/home', paintOk, (req, res) => res.json(paintingView()));
@@ -2241,6 +2256,7 @@ app.post('/api/staff/fab/rates', need('staff'), (req, res) => {
   if (!rate) return bad(res, 'Enter the rate ₹');
   const cur = FAB.settings(db());
   db().settings.fab = { ...cur, contractorRates: [...(cur.contractorRates || []), { model, rate, addedBy: p.name, addedAt: new Date().toISOString() }] };
+  refreshFabAmounts();
   store.save();
   res.json({ ok: true, model });
 });
@@ -2359,6 +2375,7 @@ admin.put('/fab/settings', (req, res) => {
       ? req.body.contractorRates.map((x) => { const model = canonModel(x && x.model); const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model)); return { model, rate: money(x && x.rate), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {}) }; }).filter((x) => x.model).slice(0, 300)
       : cur.contractorRates || [],
   };
+  refreshFabAmounts();
   fabAssign();
   store.save();
   res.json({ ok: true });
