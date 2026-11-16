@@ -2026,7 +2026,7 @@ function fabAdd(body, by, creator) {
   if (!unit) return { error: 'Choose the unit – fab is shared only between that unit\'s fab leaders' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  { const miss = rateMissing(model); if (miss) return { error: miss }; }
+  // no incentive-rate check in fab / painting for now (fab rates come later)
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const now = new Date().toISOString();
@@ -2099,7 +2099,7 @@ function paintIn(body, by) {
 function paintAdd(body, by) {
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  { const miss = rateMissing(model); if (miss) return { error: miss }; }
+  // no incentive-rate check in fab / painting for now (fab rates come later)
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const at = new Date().toISOString();
