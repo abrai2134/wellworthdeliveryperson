@@ -124,7 +124,7 @@ function bindLogout() {
 
 // ---------- login ----------
 function renderLogin(role = localStorageGet('role') || 'unit') {
-  const labels = { dispatch: 'Dispatch login ID', painting: 'Painting login ID', fab: 'Fab login ID (fab team leader / fab helper)', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders, fab – as given by admin)', admin: 'Admin username' };
+  const labels = { dispatch: 'Dispatch login ID', painting: 'Painting login ID', fab: 'Fab login ID (fab manager / fab team leader / fab helper)', unit: 'Unit login ID', staff: 'Your login ID (helpers, installation persons, team leaders, fab – as given by admin)', admin: 'Admin username' };
   $app.innerHTML = `<div class="login">
     <div class="brand"><div class="logo">🚚</div><h1>${esc(state.pub.orgName)}</h1><div class="muted">Delivery helpers &amp; installation team</div></div>
     <div class="card">
@@ -140,7 +140,7 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
         <label>${labels[role]}</label>
         <input name="username" autocomplete="username" autocapitalize="none" required>
         <label>Password${role === 'staff' || role === 'fab' ? ' / PIN' : ''}</label>
-        <input name="password" type="password" autocomplete="current-password" required>
+        <div class="pw-wrap"><input name="password" id="login-pw" type="password" autocomplete="current-password" required><button type="button" class="pw-eye" id="pw-eye" aria-label="Show password">👁 Show</button></div>
         <button class="primary" type="submit">Log in</button>
       </form>
     </div>
@@ -148,6 +148,14 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
     <p class="muted small" style="text-align:center;opacity:.7">Version ${esc(state.pub.version || '')}</p>
   </div>`;
   $app.querySelectorAll('[data-role]').forEach((b) => (b.onclick = () => { localStorageSet('role', b.dataset.role); renderLogin(b.dataset.role); }));
+  // 👁 Show / Hide the password so a wrong entry can be seen and corrected
+  document.getElementById('pw-eye').onclick = () => {
+    const pw = document.getElementById('login-pw');
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    document.getElementById('pw-eye').textContent = show ? '🙈 Hide' : '👁 Show';
+    pw.focus();
+  };
   const form = document.getElementById('login-form');
   form.onsubmit = async (e) => {
     e.preventDefault();
