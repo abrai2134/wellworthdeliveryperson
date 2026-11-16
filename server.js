@@ -1310,7 +1310,8 @@ unit.get('/assembly', (req, res) => {
   res.json({
     // assembly work of this unit: machines assembled here (not ones transferred in, not old stock)
     // open work only – assembled machines are shown to the admin only
-    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && m.status !== 'cancelled' && m.status !== 'done'),
+    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && !['cancelled', 'done', 'arrived'].includes(m.status)),
+    arrived: arrivedOf(req.user.id),
     leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
     maxPending: asmSettings().maxPending,
   });
@@ -1334,7 +1335,8 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     isLeader: p.role === 'leader',
     // own machines, plus machines this leader entered (so a wrong entry can be corrected)
     // open work only (assembled machines: admin only)
-    items: asmList((m) => m.status !== 'cancelled' && m.status !== 'done' && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
+    arrived: p.role === 'leader' ? arrivedOf(p.unitId) : [],
+    items: asmList((m) => !['cancelled', 'done', 'arrived'].includes(m.status) && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
     unitId: p.unitId,
     unitName: unitName(p.unitId),
     stock: p.role === 'leader' ? ASM.stock(db(), p.unitId) : [],
@@ -1506,7 +1508,8 @@ admin.get('/assembly', (req, res) => {
   const from = isValid(req.query.from) ? req.query.from : addDays(today(), -30);
   res.json({
     // admin only: the divert deduction amounts
-    items: asmList((m) => m.status !== 'cancelled' && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from))
+    arrived: db().units.filter((u) => !u.deleted).map((u) => ({ unitId: u.id, unitName: u.name, models: arrivedOf(u.id) })).filter((u) => u.models.length),
+    items: asmList((m) => !['cancelled', 'arrived'].includes(m.status) && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from))
       .map((v) => { const m = db().assembly.find((x) => x.id === v.id); return { ...v, diverts: v.diverts.map((d, i) => ({ ...d, amount: ((m.diverts || [])[i] || {}).amount || 0 })) }; }),
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
       .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
@@ -2104,7 +2107,8 @@ function paintAdd(body, by) {
   store.save();
   return { value: { id: '' } };
 }
-// Painted → into the chosen unit's assembly (shared between its team leaders as usual).
+// Painted → arrives at the chosen unit ("arrived from painting"); a team leader of that unit
+// presses Allocate to share them fairly between its team leaders.
 function paintOut(body, by, creator) {
   const model = str(body.model, 120);
   const qty = parseInt(body.qty, 10);
@@ -2115,7 +2119,7 @@ function paintOut(body, by, creator) {
   if (qty > list.length) return { error: `Only ${list.length} in painting` };
   const at = new Date().toISOString();
   for (const x of list.slice(0, qty)) {
-    const m = { id: newId('asm'), unitId: unit.id, model, status: 'waiting', source: 'paint', paintId: x.id, createdAt: at, createdBy: by, creator, entryBy: `${by} (painting)`, note: str(body.note, 200) };
+    const m = { id: newId('asm'), unitId: unit.id, model, status: 'arrived', arrivedAt: at, source: 'paint', paintId: x.id, createdAt: at, createdBy: by, creator, entryBy: `${by} (painting)`, note: str(body.note, 200) };
     db().assembly.push(m);
     Object.assign(x, { status: 'out', outAt: at, outBy: by, toUnitId: unit.id, asmId: m.id });
   }
@@ -2123,6 +2127,35 @@ function paintOut(body, by, creator) {
   store.save();
   return { value: { id: '' } };
 }
+// Machines that arrived at a unit from painting and are not given out yet, per model.
+function arrivedOf(unitId) {
+  const g = {};
+  for (const m of db().assembly) if (m.status === 'arrived' && m.unitId === unitId) { const x = (g[m.model] ||= { model: m.model, qty: 0, oldest: m.arrivedAt }); x.qty++; if ((m.arrivedAt || '') < x.oldest) x.oldest = m.arrivedAt; }
+  return Object.values(g).sort((a, b) => a.model.localeCompare(b.model));
+}
+// "Allocate": share the arrived machines fairly between the unit's team leaders (as before).
+function allocateArrived(unitId, model, by) {
+  const list = db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && (!model || m.model === model));
+  if (!list.length) return { error: 'Nothing to allocate' };
+  const at = new Date().toISOString();
+  for (const m of list) { m.status = 'waiting'; m.allocatedAt = at; m.allocatedBy = by; }
+  asmAssign();
+  store.save();
+  const given = list.filter((m) => m.status !== 'waiting').length;
+  return { value: { id: '', allocated: list.length, given } };
+}
+app.post('/api/staff/assembly/allocate', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can allocate');
+  const r = allocateArrived(p.unitId, str(req.body.model, 120), p.name);
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r.value });
+});
+admin.post('/assembly/allocate', (req, res) => {
+  const r = allocateArrived(str(req.body.unitId), str(req.body.model, 120), 'admin');
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r.value });
+});
 const paintOk = (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' }));
 const paintCreator = (req) => (req.user.role === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'painting', id: req.user.id });
 app.get('/api/painting/home', paintOk, (req, res) => res.json(paintingView()));
