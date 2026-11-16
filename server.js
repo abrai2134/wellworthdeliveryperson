@@ -643,7 +643,7 @@ app.get('/api/lookup/machines', (req, res, next) => (req.user ? next() : res.sta
   // machine list + model names that have an incentive rate (so the exact rate name can be picked)
   const s = asmSettings();
   const details = db().machines.map((m) => ({ label: m.label, desc: m.desc || '' }));
-  for (const x of [...(s.incentives || []), ...(s.dispatchIncentives || [])]) if (x.model && !details.some((d) => ASM.sameRate(d.label, x.model))) details.push({ label: x.model, desc: '' });
+  for (const x of [...(s.incentives || []), ...(s.dispatchIncentives || []), ...((db().settings.fab && db().settings.fab.contractorRates) || [])]) if (x.model && !details.some((d) => ASM.sameRate(d.label, x.model))) details.push({ label: x.model, desc: '' });
   res.json({ machines: details.map((d) => d.label), details });
 });
 
@@ -1153,7 +1153,7 @@ function canonModel(typed) {
   if (!t) return t;
   // a name in the incentive lists wins, so what is saved matches the rate exactly
   const s = asmSettings();
-  const rateName = [...(s.incentives || []), ...(s.dispatchIncentives || [])].map((x) => x.model).find((m) => ASM.sameRate(m, t));
+  const rateName = [...(s.incentives || []), ...(s.dispatchIncentives || []), ...((db().settings.fab && db().settings.fab.contractorRates) || [])].map((x) => x.model).find((m) => ASM.sameRate(m, t));
   if (rateName) return rateName;
   const list = db().machines.map((m) => m.label).filter(Boolean);
   const exact = list.find((l) => ASM.key(l) === ASM.key(t));
@@ -2023,12 +2023,27 @@ function fabView(m) {
     completedAt: m.completedAt || null, note: m.note || '', cancelReason: m.cancelReason || '', edits: m.edits || [],
   };
 }
+// Fab contractor rate per model (exact model name, like the assembly incentive).
+const fabRates = () => (FAB.settings(db()).contractorRates || []);
+const fabRateOf = (model) => { const r = fabRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.rate) || 0) : null; };
+function fabRateMissing(model) {
+  if (!model || fabRateOf(model) !== null) return '';
+  return `No fab contractor rate is set for model "${model}". Pick the exact model name from the list – fab entry is allowed only for models that have a fab rate. The admin adds it in 🏭 Fab & Painting → Fab contractor rate per model.`;
+}
+// Fab board for a month: machines done per fab leader and the contractor amount.
+function fabBoard(month) {
+  const done = db().fab.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
+  return db().people.filter((p) => p.role === 'fableader' && !p.deleted).map((p) => {
+    const mine = done.filter((m) => m.leaderId === p.id);
+    return { id: p.id, name: p.name, unitName: unitName(p.unitId), payType: p.payType || '', done: mine.length, amount: mine.reduce((t, m) => t + (m.contractorAmount || 0), 0) };
+  }).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
+}
 function fabAdd(body, by, creator) {
   const unit = liveUnit(str(body.unitId));
   if (!unit) return { error: 'Choose the unit – fab is shared only between that unit\'s fab leaders' };
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  // no incentive-rate check in fab / painting for now (fab rates come later)
+  { const miss = fabRateMissing(model); if (miss) return { error: miss }; }
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const now = new Date().toISOString();
@@ -2049,6 +2064,12 @@ function fabDone(m, body, by) {
   const t = asmTimes(m, body, true);
   if (t.error) return t;
   m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
+  { // contractor fab leader: paid the model's fab rate per machine (fixed when it is done)
+    const leader = db().people.find((p) => p.id === m.leaderId);
+    const rate = fabRateOf(m.model) || 0;
+    m.fabRate = rate;
+    m.contractorAmount = leader && leader.payType === 'contractor' ? rate : 0;
+  }
   if (body.startedAt || body.completedAt) m.timesEditedBy = by;
   db().painting.push({ id: newId('pnt'), fabId: m.id, unitId: m.unitId || null, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt });
   fabAssign();
@@ -2113,7 +2134,7 @@ function paintIn(body, by) {
 function paintAdd(body, by) {
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  // no incentive-rate check in fab / painting for now (fab rates come later)
+  // no rate check for machines put straight into painting
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const at = new Date().toISOString();
@@ -2196,6 +2217,7 @@ app.get('/api/staff/fab', need('staff'), (req, res) => {
     unitId: p.unitId,
     units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
     month,
+    myAmount: p.role === 'fableader' && p.payType === 'contractor' ? db().fab.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.contractorAmount || 0), 0) : null,
     done: db().fab.filter((m) => m.status === 'done' && (manager ? m.unitId === p.unitId : mine(m)) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(fabView),
   });
 });
@@ -2222,6 +2244,8 @@ admin.get('/fab', (req, res) => {
     leaders: fabLeaders(),
     helpers: db().people.filter((p) => p.role === 'fabhelper' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId) })),
     settings: FAB.settings(db()),
+    month: monthOf(req.query.month),
+    board: fabBoard(monthOf(req.query.month)),
     painting: paintingView(),
     painters: db().painters.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
   });
@@ -2308,7 +2332,15 @@ admin.post('/fab/:id/cancel', (req, res) => {
   res.json({ ok: true });
 });
 admin.put('/fab/settings', (req, res) => {
-  db().settings.fab = { ...FAB.settings(db()), maxPending: Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) };
+  const cur = FAB.settings(db());
+  const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
+  db().settings.fab = {
+    ...cur,
+    maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
+    contractorRates: Array.isArray(req.body.contractorRates)
+      ? req.body.contractorRates.map((x) => ({ model: canonModel(x && x.model), rate: money(x && x.rate) })).filter((x) => x.model).slice(0, 300)
+      : cur.contractorRates || [],
+  };
   fabAssign();
   store.save();
   res.json({ ok: true });
