@@ -1509,6 +1509,7 @@ admin.get('/assembly', (req, res) => {
       .map((r) => ({ ...r, leaderName: personName(r.leaderId), unitName: unitName(r.unitId), leaderPending: ASM.pendingOf(db(), r.leaderId), installerName: personName(r.installerId), helperName: personName(r.helperId) })),
     settings: asmSettings(),
     bonusUnits: ASM.bonusUnits(db()),
+    reducedUnits: ASM.reducedDispatchUnits(db()),
     stock: ASM.stock(db()),
     dispatchers: db().dispatchers.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
     leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
@@ -1704,6 +1705,8 @@ admin.put('/assembly/settings', (req, res) => {
     divertPenalty: b.divertPenalty !== undefined ? money(b.divertPenalty) : cur.divertPenalty,
     maxInstallerPending: Math.max(1, Math.min(50, parseInt(b.maxInstallerPending, 10) || cur.maxInstallerPending || 10)),
     defaultDispatch: b.defaultDispatch !== undefined ? money(b.defaultDispatch) : cur.defaultDispatch,
+    reducedDispatchUnits: Array.isArray(b.reducedDispatchUnits) ? b.reducedDispatchUnits.map((x) => str(x)).filter((id) => db().units.some((u) => u.id === id)) : cur.reducedDispatchUnits,
+    reducedDispatchPercent: b.reducedDispatchPercent !== undefined && b.reducedDispatchPercent !== '' ? Math.max(0, Math.min(100, Number(b.reducedDispatchPercent) || 0)) : cur.reducedDispatchPercent,
     unitDispatchUnits: Array.isArray(b.unitDispatchUnits) ? b.unitDispatchUnits.map((x) => str(x)).filter((id) => db().units.some((u) => u.id === id)) : cur.unitDispatchUnits,
     unitDispatchSlabs: Array.isArray(b.unitDispatchSlabs)
       ? b.unitDispatchSlabs.map((x) => ({ from: Math.max(1, parseInt(x && x.from, 10) || 0), amount: money(x && x.amount) })).filter((x) => x.from >= 1).sort((a, c) => a.from - c.from).slice(0, 10)
@@ -1752,6 +1755,12 @@ function sendFromGodown(body, who) {
   }
   // check the destination before saving any photo
   if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
+  // A machine booked for one client cannot be dispatched to another.
+  if (to === 'client') {
+    const norm = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const wrong = avail.slice(0, qty).find((m) => m.bookedParty && norm(m.bookedParty) !== norm(body.party));
+    if (wrong) return { error: `This machine is booked for "${wrong.bookedParty}" but you are dispatching to "${str(body.party)}". Booked for someone else and dispatching to someone else – kindly correct the booking name first (✎ Correct → Change booking).` };
+  }
   if (to === 'unit' && (!liveUnit(str(body.toUnitId)) || str(body.toUnitId) === fromUnitId)) return { error: 'Choose a different unit to send to' };
   // Dispatch photo (vehicle / loaded machine / challan) is compulsory for Dispatch logins.
   const ph = readPhotos({ photos: [] }, body.photos);
@@ -1782,7 +1791,7 @@ function sendFromGodown(body, who) {
       m.dispatchedAt = at;
       m.dispatchedBy = by;
       m.dispatchNote = str(body.note, 200);
-      m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, amount: ASM.incentiveFor(db(), m.model).dispatch } : null;
+      m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, fromUnitId: m.unitId, amount: ASM.dispatchAmount(db(), m.model, m.unitId) } : null;
     }
   } else return { error: 'Choose: to another unit or to a client' };
   store.save();
@@ -1826,7 +1835,7 @@ function refreshDispatchIncentives() {
   for (const m of db().assembly) {
     const d = m.dispatchIncentive;
     if (m.location !== 'dispatched' || !d || !d.dispatcherId || d.amount || (m.dispatchedAt || '') < since) continue;
-    const amount = ASM.incentiveFor(db(), m.model).dispatch;
+    const amount = ASM.dispatchAmount(db(), m.model, d.fromUnitId || m.unitId);
     if (amount > 0) { d.amount = amount; d.rateAddedLater = true; n++; }
   }
   return n;
