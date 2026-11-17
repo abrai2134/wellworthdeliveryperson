@@ -2355,6 +2355,32 @@ function fabMove(body, by, unitId) {
   store.save();
   return { value: { id: '', moved: qty } };
 }
+// Admin corrects a fab order line (fab leader + model): wrong model no., or too many entered.
+admin.post('/fab/correct', (req, res) => {
+  const leaderId = str(req.body.leaderId);
+  const model = str(req.body.model, 120);
+  const unitId = str(req.body.unitId);
+  const list = db().fab.filter((m) => (m.leaderId || '') === leaderId && m.model === model && FAB.OPEN.includes(m.status) && (!unitId || m.unitId === unitId))
+    .sort((a, b) => (a.status === 'started') - (b.status === 'started')); // not started first
+  if (!list.length) return bad(res, 'Those machines are no longer open – refresh the page');
+  const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
+  const at = new Date().toISOString();
+  if (req.body.action === 'remove') {
+    const reason = str(req.body.reason, 150);
+    if (!reason) return bad(res, 'Write why they are removed');
+    for (const m of list.slice(0, qty)) { m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = 'admin'; m.cancelReason = reason; }
+    fabAssign();
+    store.save();
+    return res.json({ ok: true, changed: qty });
+  }
+  const newModel = canonModel(req.body.newModel);
+  if (!newModel) return bad(res, 'Enter the correct model no.');
+  if (newModel === model) return bad(res, 'The model no. is the same');
+  { const miss = fabRateMissing(newModel); if (miss) return bad(res, miss); }
+  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by: 'admin', model: { from: m.model, to: newModel } }); m.model = newModel; }
+  store.save();
+  res.json({ ok: true, changed: qty, model: newModel });
+});
 admin.post('/fab/move', (req, res) => { const r = fabMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
 unit.post('/fab/move', (req, res) => { const r = fabMove(req.body, (req.user.account.name || req.user.account.username) + ' (unit)', req.user.id); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
 app.post('/api/staff/fab/move', need('staff'), (req, res) => {

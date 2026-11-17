@@ -2451,7 +2451,7 @@ function fabSummaryHtml(items, moveUrl) {
   }
   const names = Object.keys(g).sort();
   if (!names.length) return '';
-  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td>${r.leaderId && r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}">⇄ Move</button>` : ''}</td>` : ''}</tr>`));
+  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.leaderId && r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}">⇄ Move</button>` : ''}${moveUrl.startsWith('/admin') ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
   return `<div class="card section"><h3 style="margin-top:0">📦 Fab – given to each fab leader</h3><div class="table-wrap"><table><thead><tr><th>Fab leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">In fab</th>${moveUrl ? '<th></th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
 }
 function fabAddForm(url, reload, units, myUnit) {
@@ -2611,6 +2611,38 @@ document.addEventListener('click', (e) => {
     toast(`${r.moved} moved`);
     render();
   });
+});
+
+// Admin ✎ Correct on a fab order line: wrong model no., or remove extra machines.
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-fab-correct]');
+  if (!b) return;
+  const [leaderId, unitId, max] = b.dataset.fabCorrect.split('|');
+  const models = await loadMachineList();
+  openModal(`<h2>✎ Correct fab order</h2><div class="muted">${esc(b.dataset.model)} · <b>${esc(b.dataset.name)}</b> (${max} open)</div>
+    <label>What is wrong? *</label>
+    <div class="row"><label class="check"><input type="radio" name="action" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="action" value="remove"> ➖ Entered by mistake – remove</label></div>
+    <div id="fc-model"><label>Correct model no. *</label><input name="newModel" list="asm-models-fc" placeholder="type and pick from the list"></div>
+    <datalist id="asm-models-fc">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+    <div id="fc-remove" hidden><label>Why? *</label><input name="reason" placeholder="e.g. entered 5, only 3 ordered"></div>
+    <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="${esc(max)}" required>
+    <p class="small muted">Machines not started yet are changed first.</p>
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+  async (fd) => {
+    const action = fd.get('action');
+    if (action === 'model' && !String(fd.get('newModel') || '').trim()) throw new Error('Enter the correct model no.');
+    if (action === 'remove' && !String(fd.get('reason') || '').trim()) throw new Error('Write why they are removed');
+    if (action === 'remove' && !confirm(`Remove ${fd.get('qty')} × ${b.dataset.model}?`)) return;
+    const r = await api('/admin/fab/correct', { method: 'POST', body: { leaderId, unitId, model: b.dataset.model, action, newModel: fd.get('newModel'), reason: fd.get('reason'), qty: fd.get('qty') } });
+    toast(action === 'remove' ? `${r.changed} removed` : `${r.changed} changed to ${r.model}`);
+    renderAdmin();
+  });
+  modalBody.querySelectorAll('[name=action]').forEach((x) => (x.onchange = () => {
+    const rm = modalBody.querySelector('[name=action]:checked').value === 'remove';
+    document.getElementById('fc-model').hidden = rm;
+    document.getElementById('fc-remove').hidden = !rm;
+    if (rm) modalBody.querySelector('[name=qty]').value = 1;
+  }));
 });
 
 // Unit login: 🏭 Fab – the unit manager enters machines and shares them between its fab leaders.
