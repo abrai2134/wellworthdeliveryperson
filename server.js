@@ -2244,7 +2244,7 @@ app.post('/api/staff/fab', need('staff'), (req, res) => {
 // Fab manager: see the fab rates and add a rate for a NEW model (changing a rate is admin only).
 app.get('/api/staff/fab/rates', need('staff'), (req, res) => {
   if (req.user.account.role !== 'fabmanager') return bad(res, 'Only the fab manager');
-  res.json({ rates: fabRates() });
+  res.json({ rates: fabRates(), me: req.user.account.name });
 });
 app.post('/api/staff/fab/rates', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2259,6 +2259,32 @@ app.post('/api/staff/fab/rates', need('staff'), (req, res) => {
   refreshFabAmounts();
   store.save();
   res.json({ ok: true, model });
+});
+// Fab manager corrects a rate THEY added (model name and/or rate). Open fab machines of their unit
+// entered under the old name are renamed too, so they keep matching the rate.
+app.put('/api/staff/fab/rates', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager');
+  const cur = FAB.settings(db());
+  const list = (cur.contractorRates || []).slice();
+  const i = list.findIndex((x) => x.model === str(req.body.oldModel, 120));
+  if (i < 0) return bad(res, 'Rate not found – refresh the page');
+  if (list[i].addedBy !== p.name) return bad(res, 'Only rates you added can be changed here – ask the admin');
+  const model = canonModel(req.body.model);
+  if (!model) return bad(res, 'Enter the model no.');
+  const rate = Math.max(0, Math.min(100000, Math.round(Number(req.body.rate) || 0)));
+  if (!rate) return bad(res, 'Enter the rate ₹');
+  const old = list[i].model;
+  // the correct model already has a rate: drop this wrong entry (the existing rate stays) and move its machines
+  const dup = list.findIndex((x, k) => k !== i && ASM.sameRate(x.model, model));
+  if (dup >= 0) list.splice(i, 1);
+  else list[i] = { ...list[i], model, rate, editedBy: p.name, editedAt: new Date().toISOString() };
+  db().settings.fab = { ...cur, contractorRates: list };
+  let renamed = 0;
+  if (old !== model) for (const m of db().fab) if (m.model === old && m.unitId === p.unitId && FAB.OPEN.includes(m.status)) { (m.edits = m.edits || []).push({ at: new Date().toISOString(), by: p.name + ' (fab manager)', model: { from: old, to: model } }); m.model = model; renamed++; }
+  refreshFabAmounts();
+  store.save();
+  res.json({ ok: true, model, renamed, merged: dup >= 0 });
 });
 app.post('/api/staff/fab/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;

@@ -2585,12 +2585,27 @@ async function renderFabStaff() {
     const [rt, models] = await Promise.all([api('/staff/fab/rates'), loadMachineList()]);
     openModal(`<h2>💰 Fab contractor rates</h2>
       <details><summary class="small"><b>Rates (${rt.rates.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Rate ₹</th></tr></thead><tbody>
-        ${rt.rates.map((x) => `<tr><td>${esc(x.model)}${x.addedBy ? ` <span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}</td><td class="num">${x.rate}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">No rate yet.</td></tr>'}</tbody></table></div></details>
+        ${rt.rates.map((x, i) => `<tr><td>${esc(x.model)}${x.addedBy ? ` <span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}</td><td class="num">${x.rate}</td><td>${x.addedBy === rt.me ? `<button type="button" class="link small" data-fr-edit="${i}">✎ Edit</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No rate yet.</td></tr>'}</tbody></table></div></details>
       <h3 style="margin-top:12px">Add a new model</h3><p class="small muted">Only models without a rate can be added here. Existing rates are changed by the admin.</p>
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-fm" required></div><div><label>Rate ₹ *</label><input name="rate" type="number" min="1" required></div></div>
       <datalist id="asm-models-fm">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
       <div class="actions"><button value="cancel">Close</button><button class="primary" value="ok">Add rate</button></div>`,
     async (fd) => { const x = await api('/staff/fab/rates', { method: 'POST', body: Object.fromEntries(fd) }); toast(`Rate added for ${x.model}`); renderStaff(); });
+    // ✎ Edit a rate this fab manager added (wrong model name / rate)
+    modalBody.querySelectorAll('[data-fr-edit]').forEach((b) => (b.onclick = () => {
+      const x = rt.rates[Number(b.dataset.frEdit)];
+      openModal(`<h2>✎ Edit fab rate</h2><div class="muted small">Added by you: <b>${esc(x.model)}</b> · ₹${x.rate}</div>
+        <label>⚙️ Correct model no. *</label><input name="model" list="asm-models-fe" required value="${esc(x.model)}">
+        <datalist id="asm-models-fe">${models.map((y) => `<option value="${esc(typeof y === 'string' ? y : y.label)}"></option>`).join('')}</datalist>
+        <label>Rate ₹ *</label><input name="rate" type="number" min="1" required value="${esc(x.rate)}">
+        <p class="small muted">Open fab machines of your unit entered as "${esc(x.model)}" are renamed too. If the correct model already has a rate, this wrong entry is removed and that rate is kept.</p>
+        <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+      async (fd) => {
+        const r = await api('/staff/fab/rates', { method: 'PUT', body: { oldModel: x.model, model: fd.get('model'), rate: fd.get('rate') } });
+        toast(`${r.merged ? `Merged into ${r.model} (its existing rate stays)` : 'Saved'}${r.renamed ? ` – ${r.renamed} fab machine(s) renamed` : ''}`);
+        renderStaff();
+      });
+    }));
   };
   document.getElementById('fab-month').onchange = (e) => { state.fabMonth = e.target.value; renderStaff(); };
 }
