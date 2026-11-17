@@ -2333,7 +2333,7 @@ function bindSend(root, url, units, reload) {
     const pickHtml = booked.length ? `<label>Which machines? *</label><div class="pick-list">
         ${free > 0 ? `<label class="check"><input type="radio" name="pick" value="free"> 🏬 Free stock (not booked) – ${free}</label>` : ''}
         ${booked.map((x) => `<label class="check"><input type="radio" name="pick" value="${esc(x.party)}"> 👤 Booked: <b>${esc(x.party)}</b> – ${x.qty}</label>`).join('')}</div>
-      <div class="small muted">Sending to another unit: the booking goes with the machine to that godown.</div>` : '';
+      <div class="small muted">Free stock can only go to another unit's godown; to dispatch it to a client, book it first. Sending to another unit: the booking goes with the machine.</div>` : '';
     openModal(`<h2>🚚 Send from godown</h2><div class="muted">${esc(from.name)} · ⚙️ ${esc(model)} · ${max} in godown</div>
       ${pickHtml}
       ${entryHtml}
@@ -2341,7 +2341,7 @@ function bindSend(root, url, units, reload) {
       <label>Send to *</label>
       <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
       <div id="s-client" class="lookup">${b.dataset.norate ? '<div class="error" style="margin:6px 0">⚠ No dispatch incentive is set for this model – you get ₹0 for it until the admin adds its rate (exact model name).</div>' : ''}<label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
-        <div class="small muted">You get the dispatch incentive for each machine sent to a client.</div></div>
+        <div class="small muted">Only machines <b>booked for this client</b> can be dispatched. You get the dispatch incentive for each machine sent to a client.</div></div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
         <div class="small muted">Moves to that unit's godown (a booked machine stays booked for its client).</div></div>
       <label>📷 Dispatch photo ${url.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
@@ -2352,6 +2352,7 @@ function bindSend(root, url, units, reload) {
     async (fd) => {
       const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model, photos: getPhotos() };
       if (booked.length && !body.pick) throw new Error('Choose which machines you are sending: free stock or booked for a client');
+      if (body.to === 'client' && (!booked.length || body.pick === 'free')) throw new Error('Free stock (not booked) cannot be dispatched to a client. Book the machine for the client first (✎ Correct → Change booking), then you can dispatch. Free stock can only be sent to another unit\'s godown.');
       if (entries.length > 1 && body.entryIdx === undefined) throw new Error('Choose which machines you are sending (assembled by whom / when)');
       if (entries.length > 1) { const e = entries[Number(body.entryIdx)]; body.entry = e.text; body.entryAt = e.at; if (Number(body.qty) > e.qty) throw new Error(`Only ${e.qty} of those machines`); delete body.entryIdx; }
       const groupMax = !body.pick ? Number(max) : body.pick === 'free' ? free : (booked.find((x) => x.party === body.pick) || {}).qty || 0;

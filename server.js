@@ -1815,6 +1815,11 @@ function sendFromGodown(body, who) {
   }
   // check the destination before saving any photo
   if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
+  // Only machines booked for a client can be dispatched to a client; free stock moves only
+  // to another unit's godown.
+  if (to === 'client' && avail.slice(0, qty).some((m) => !m.bookedParty)) {
+    return { error: 'Free stock (not booked) cannot be dispatched to a client. Book the machine for the client first (✎ Correct → Change booking), then you can dispatch. Free stock can only be sent to another unit\'s godown.' };
+  }
   // A machine booked for one client cannot be dispatched to another.
   if (to === 'client') {
     const norm = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, ' ');
