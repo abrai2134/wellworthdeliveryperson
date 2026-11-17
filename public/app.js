@@ -2310,10 +2310,24 @@ document.addEventListener('click', async (e) => {
   modalBody.querySelectorAll('[name=entry]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; q.value = e.qty; }));
 });
 
+// Recent dispatches: search by model no. / by / from / to (ignores ~, spaces and capitals).
+document.addEventListener('input', (e) => {
+  if (!e.target.classList || !e.target.classList.contains('hist-search')) return;
+  const card = e.target.closest('.hist-card');
+  const words = e.target.value.toUpperCase().split(/\s+/).map((w) => w.replace(/[^A-Z0-9]/g, '')).filter(Boolean);
+  let shown = 0;
+  card.querySelectorAll('tbody tr[data-hs]').forEach((tr) => {
+    const text = tr.dataset.hs.replace(/ /g, '') + ' ' + tr.dataset.hs;
+    const ok = words.every((w) => text.includes(w));
+    tr.hidden = !ok;
+    if (ok) shown++;
+  });
+  card.querySelector('.hist-count').textContent = words.length ? `${shown} found` : '';
+});
 function historyHtml(history) {
   if (!history || !history.length) return '';
-  return `<div class="card section"><h2>Recent dispatches (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th>Photo</th><th class="num">Dispatch incentive</th></tr></thead><tbody>
-    ${history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}${(h.items || []).length ? `<div class="small muted">${h.items.map((x) => `${esc(x.how)}${x.when ? ' · ' + esc(fmtTime(x.when + ':00Z')) : ''}${x.qty > 1 ? ' × ' + x.qty : ''}`).join('<br>')}</div>` : ''}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}${h.booked ? `<div class="small"><span class="badge warn">👤 booked: ${esc(h.booked)}</span></div>` : ''}</td><td class="small">${esc(h.by)}</td><td>${h.photo ? `<a href="/api/photos/${esc(h.photo)}" target="_blank" rel="noopener"><img src="/api/photos/${esc(h.photo)}" alt="dispatch photo" style="width:44px;height:44px;object-fit:cover;border-radius:6px"></a>` : '<span class="muted small">—</span>'}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
+  return `<div class="card section hist-card"><div class="row"><h2 style="margin:0">Recent dispatches (30 days)</h2><div class="spacer"></div><input class="hist-search" placeholder="🔍 Search model no., by, from or to" style="max-width:320px"></div><div class="small muted hist-count" style="margin:4px 0"></div><div class="table-wrap"><table><thead><tr><th>When</th><th>Model no.</th><th class="num">Qty</th><th>From</th><th>To</th><th>By</th><th>Photo</th><th class="num">Dispatch incentive</th></tr></thead><tbody>
+    ${history.map((h) => `<tr data-hs="${esc([h.model, h.by, h.from, h.to, h.booked || '', ...(h.items || []).map((x) => x.how)].join(' ').toUpperCase().replace(/[^A-Z0-9 ]/g, ''))}"><td class="small">${esc(fmtTime(h.at))}</td><td>${esc(h.model)}${(h.items || []).length ? `<div class="small muted">${h.items.map((x) => `${esc(x.how)}${x.when ? ' · ' + esc(fmtTime(x.when + ':00Z')) : ''}${x.qty > 1 ? ' × ' + x.qty : ''}`).join('<br>')}</div>` : ''}</td><td class="num"><b>${h.qty}</b></td><td>${esc(h.from)}</td><td>${h.kind === 'client' ? '👤 ' : '🏬 '}${esc(h.to)}${h.booked ? `<div class="small"><span class="badge warn">👤 booked: ${esc(h.booked)}</span></div>` : ''}</td><td class="small">${esc(h.by)}</td><td>${h.photo ? `<a href="/api/photos/${esc(h.photo)}" target="_blank" rel="noopener"><img src="/api/photos/${esc(h.photo)}" alt="dispatch photo" style="width:44px;height:44px;object-fit:cover;border-radius:6px"></a>` : '<span class="muted small">—</span>'}</td><td class="num">${h.kind === 'client' ? (h.incentive ? `₹${h.incentive}` : '—') : '<span class="muted">– unit transfer</span>'}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 
