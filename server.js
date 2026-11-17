@@ -2044,7 +2044,13 @@ app.post('/api/godown/remove', (req, res) => {
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
   const by = role === 'admin' ? 'admin' : role === 'unit' ? (req.user.account.name || req.user.account.username) + ' (unit)' : req.user.account.name || '';
   const at = new Date().toISOString();
-  for (const m of list.slice(0, qty)) { m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = by; m.cancelReason = 'Removed from stock: ' + reason; }
+  for (const m of list.slice(0, qty)) {
+    if (m.source !== 'stock' && m.leaderId) {
+      // an assembled machine: it only leaves the godown list – the team leader keeps the assembly
+      // and the incentive (it was really assembled)
+      m.location = 'removed'; m.removedAt = at; m.removedBy = by; m.removeReason = reason;
+    } else { m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = by; m.cancelReason = 'Removed from stock: ' + reason; }
+  }
   store.save();
   res.json({ ok: true, removed: qty });
 });
@@ -2106,6 +2112,21 @@ admin.delete('/dispatchers/:id', (req, res) => {
   store.save();
   res.json({ ok: true });
 });
+
+// Assembled machines that were taken out of the godown list before were cancelled, which also
+// took the team leader's assembly and incentive away: give them back (they stay out of the godown).
+{
+  let n = 0;
+  for (const m of db().assembly) {
+    if (m.status === 'cancelled' && m.source !== 'stock' && m.leaderId && m.completedAt && String(m.cancelReason || '').startsWith('Removed from stock: ')) {
+      m.status = 'done'; m.location = 'removed';
+      m.removedAt = m.cancelledAt; m.removedBy = m.cancelledBy; m.removeReason = m.cancelReason.replace('Removed from stock: ', '');
+      delete m.cancelledAt; delete m.cancelledBy; delete m.cancelReason;
+      n++;
+    }
+  }
+  if (n) { console.log(`Restored ${n} assembled machine(s) taken out of the godown list`); store.save(); }
+}
 
 // ---------- Fab → Painting → Assembly ----------
 const FAB = require('./lib/fab');
