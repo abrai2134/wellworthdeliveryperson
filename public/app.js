@@ -2216,7 +2216,7 @@ function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
     ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${x.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(x.at + ':00Z'))}</span>` : ''}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="booked-list">${m.booked.map((x) => `<span class="booked-line">👤 booked: <b>${esc(x.party)}</b> × ${x.qty}</span>`).join('')}</span>` : ''}</span>
-        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}" data-norate="${m.noDispatchRate ? 1 : ''}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
+        <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-norate="${m.noDispatchRate ? 1 : ''}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
 }
 
@@ -2324,6 +2324,10 @@ function bindSend(root, url, units, reload) {
     const from = units.find((u) => u.id === unitId) || { name: '' };
     let booked = [];
     try { booked = JSON.parse(b.dataset.booked || '[]'); } catch { booked = []; }
+    let entries = [];
+    try { entries = JSON.parse(b.dataset.entries || '[]'); } catch { entries = []; }
+    // which physical machines are loaded (assembled by whom / when) – keeps the godown list right
+    const entryHtml = entries.length > 1 ? `<label>Which machines are you sending? *</label><div class="pick-list">${entries.map((x, i) => `<label class="check"><input type="radio" name="entryIdx" value="${i}"> ${esc(x.text)}${x.at ? ` · 🕒 ${esc(fmtTime(x.at + ':00Z'))}` : ''} – ${x.qty}</label>`).join('')}</div>` : '';
     const free = Number(max) - booked.reduce((n, x) => n + x.qty, 0);
     // Some machines of this model are booked: ask which ones are going (the booking moves with them).
     const pickHtml = booked.length ? `<label>Which machines? *</label><div class="pick-list">
@@ -2332,6 +2336,7 @@ function bindSend(root, url, units, reload) {
       <div class="small muted">Sending to another unit: the booking goes with the machine to that godown.</div>` : '';
     openModal(`<h2>🚚 Send from godown</h2><div class="muted">${esc(from.name)} · ⚙️ ${esc(model)} · ${max} in godown</div>
       ${pickHtml}
+      ${entryHtml}
       <label>Quantity *</label><input name="qty" type="number" min="1" max="${max}" value="1" required>
       <label>Send to *</label>
       <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
@@ -2347,6 +2352,8 @@ function bindSend(root, url, units, reload) {
     async (fd) => {
       const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model, photos: getPhotos() };
       if (booked.length && !body.pick) throw new Error('Choose which machines you are sending: free stock or booked for a client');
+      if (entries.length > 1 && body.entryIdx === undefined) throw new Error('Choose which machines you are sending (assembled by whom / when)');
+      if (entries.length > 1) { const e = entries[Number(body.entryIdx)]; body.entry = e.text; body.entryAt = e.at; if (Number(body.qty) > e.qty) throw new Error(`Only ${e.qty} of those machines`); delete body.entryIdx; }
       const groupMax = !body.pick ? Number(max) : body.pick === 'free' ? free : (booked.find((x) => x.party === body.pick) || {}).qty || 0;
       if (Number(body.qty) > groupMax) throw new Error(`Only ${groupMax} of those in the godown`);
       if (!body.photos.length && !url.startsWith('/admin')) throw new Error('Take a dispatch photo first');
@@ -2358,6 +2365,7 @@ function bindSend(root, url, units, reload) {
     });
     clientSearch(document.getElementById('s-party'), document.getElementById('s-party-list'));
     const getPhotos = photoPicker(document.getElementById('s-photos'));
+    modalBody.querySelectorAll('[name=entryIdx]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; if (Number(q.value) > e.qty) q.value = e.qty; }));
     // booked machine going to a client: fill in that client's name
     modalBody.querySelectorAll('[name=pick]').forEach((r) => (r.onchange = () => {
       const p = modalBody.querySelector('[name=pick]:checked').value;

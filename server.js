@@ -1801,6 +1801,18 @@ function sendFromGodown(body, who) {
     if (qty > group.length) return { error: `Only ${group.length} ${pick === 'free' ? 'free (not booked)' : 'booked for ' + pick} in the godown` };
     avail.splice(0, avail.length, ...group);
   }
+  // "Which machines" by entry (assembled by whom / old stock / transfer, with date): the ones that
+  // are physically loaded, so the godown list stays right. Compulsory when the line has more than one.
+  const entry = str(body.entry, 300);
+  const entryAt = str(body.entryAt, 40);
+  const entries = new Set(avail.map((m) => ASM.stockEntry(db(), m) + '|' + ASM.stockEntryAt(m)));
+  if (entries.size > 1 && !entry) return { error: 'Choose which machines you are sending (assembled by whom / when)' };
+  if (entry) {
+    const group = avail.filter((m) => ASM.stockEntry(db(), m) === entry && (!entryAt || ASM.stockEntryAt(m) === entryAt));
+    if (!group.length) return { error: 'Those machines are no longer in this godown – refresh the page' };
+    if (qty > group.length) return { error: `Only ${group.length} of those machines in the godown` };
+    avail.splice(0, avail.length, ...group);
+  }
   // check the destination before saving any photo
   if (to === 'client' && !str(body.party)) return { error: 'Client name is compulsory' };
   // A machine booked for one client cannot be dispatched to another.
