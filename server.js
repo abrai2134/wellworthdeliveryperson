@@ -133,6 +133,32 @@ app.get('/api/public', (req, res) => {
   res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION });
 });
 
+// Public machine search (no login): where a model is – per unit, how many in fab, painting,
+// assembly and godown stock. Counts only (no names, clients or money).
+app.get('/api/public/find', (req, res) => {
+  const q = String(req.query.q || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (q.length < 2) return res.json({ models: [] });
+  const hit = (model) => String(model || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(q);
+  const units = Object.fromEntries(db().units.filter((u) => !u.deleted).map((u) => [u.id, u.name]));
+  const out = {};
+  const row = (model, unitId) => {
+    const m = (out[model] ||= { model, units: {} });
+    return (m.units[unitId || ''] ||= { unit: units[unitId] || '(no unit)', fabNotStarted: 0, inFab: 0, paintComing: 0, inPainting: 0, arrived: 0, notStarted: 0, assembling: 0, godown: 0, booked: 0 });
+  };
+  for (const m of db().fab) if (hit(m.model) && FAB.OPEN.includes(m.status)) row(m.model, m.unitId)[m.status === 'started' ? 'inFab' : 'fabNotStarted']++;
+  for (const x of db().painting) if (hit(x.model) && ['coming', 'in'].includes(x.status)) row(x.model, x.unitId)[x.status === 'coming' ? 'paintComing' : 'inPainting']++;
+  for (const m of db().assembly) {
+    if (!hit(m.model)) continue;
+    if (m.status === 'arrived') row(m.model, m.unitId).arrived++;
+    else if (m.status === 'waiting' || m.status === 'assigned') row(m.model, m.unitId).notStarted++;
+    else if (m.status === 'started') row(m.model, m.unitId).assembling++;
+    else if (m.status === 'done' && m.location === 'godown') { const r = row(m.model, m.unitId); r.godown++; if (m.bookedParty) r.booked++; }
+  }
+  const models = Object.values(out).map((m) => ({ model: m.model, units: Object.values(m.units).sort((a, b) => a.unit.localeCompare(b.unit)) }))
+    .sort((a, b) => a.model.localeCompare(b.model)).slice(0, 30);
+  res.json({ models });
+});
+
 app.post('/api/login', (req, res) => {
   const rec = tooMany(req.ip);
   if (rec.count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
