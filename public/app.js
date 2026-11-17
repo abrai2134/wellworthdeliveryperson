@@ -1538,7 +1538,7 @@ function asmCard(m, who, me) {
 
 // Summary: for each team leader, how many of each model are given / assembling / assembled.
 // showDone: the "Assembled" column is for the admin only; team leaders and units see open work.
-function asmSummary(items, showDone) {
+function asmSummary(items, showDone, doneLabel) {
   const groups = {};
   for (const m of items) {
     if (!showDone && m.status === 'done') continue;
@@ -1553,8 +1553,8 @@ function asmSummary(items, showDone) {
   const rows = names.flatMap((n) => Object.entries(groups[n].models).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(groups[n].models).length}"><b>${esc(n)}</b>${n.startsWith('⏳') ? '' : `<div class="small muted">${groups[n].open} open</div>`}</td>` : ''}
       <td>${esc(model)}</td><td class="num"><b>${r.given + r.started + r.waiting + (showDone ? r.done : 0)}</b></td><td class="num">${r.waiting || r.given || ''}</td><td class="num">${r.started || ''}</td>${showDone ? `<td class="num">${r.done || ''}</td>` : ''}</tr>`));
   return `<div class="card section"><h3 style="margin-top:0">📦 Given to each team leader</h3><div class="table-wrap"><table>
-    <thead><tr><th>Team leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">Assembling</th>${showDone ? '<th class="num">Assembled</th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
-    ${showDone ? '<div class="small muted" style="margin-top:4px">Assembled = last 30 days.</div>' : ''}</div>`;
+    <thead><tr><th>Team leader</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">Assembling</th>${showDone ? `<th class="num">${doneLabel || 'Assembled'}</th>` : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    ${showDone ? `<div class="small muted" style="margin-top:4px">${doneLabel ? 'Assembled = still in the godown; machines transferred to another unit or dispatched to a client drop off.' : 'Assembled = last 30 days.'}</div>` : ''}</div>`;
 }
 
 // One short line per machine; tap it to open the full card (with its buttons).
@@ -1617,20 +1617,23 @@ function asmGrouped(list, who, me) {
   return names.map((n, gi) => {
     const g = groups[n];
     const started = g.filter((m) => m.status === 'started').length;
+    const doneN = g.filter((m) => m.status === 'done').length;
     const clusters = {};
     for (const m of g) (clusters[[m.status, m.model].join('|')] ||= []).push(m);
     const tid = 't' + Math.random().toString(36).slice(2, 8) + gi;
     state.teamTexts[tid] = teamText(n.replace(/^⏳ /, ''), g);
-    return `<div class="done-list asm-group"><div class="dl-head row"><span><b>👷 ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${started ? ` · ${started} assembling` : ''}</span></span><span class="spacer"></span>
+    return `<div class="done-list asm-group"><div class="dl-head row"><span><b>👷 ${esc(n)}</b> <span class="muted">· ${g.length - doneN} open${started ? ` · ${started} assembling` : ''}${doneN ? ` · ✓ ${doneN} assembled` : ''}</span></span><span class="spacer"></span>
         <button type="button" class="link small" data-team-copy="${tid}">📋 Copy</button><button type="button" class="link small" data-team-wa="${tid}">📤 WhatsApp</button></div>
-      ${Object.values(clusters).map((c) => asmCluster(c, who, me)).join('')}</div>`;
+      ${Object.values(clusters).sort((a, b) => ({ started: 0, assigned: 1, waiting: 2, done: 3 }[a[0].status] ?? 1) - ({ started: 0, assigned: 1, waiting: 2, done: 3 }[b[0].status] ?? 1)).map((c) => asmCluster(c, who, me)).join('')}</div>`;
   }).join('');
 }
 
 function asmList(items, who, me) {
   const open = items.filter((m) => m.status !== 'done');
   const done = items.filter((m) => m.status === 'done');
-  const admin = who === 'admin'; // assembled machines: admin only
+  const admin = who === 'admin';
+  // units / team leaders: assembled machines still in the godown are shown with each team leader
+  if (!admin) return `${asmSummary(items, true, 'Assembled (in godown)')}${items.length ? asmGrouped(items, who, me) : '<div class="card muted">No machine pending.</div>'}`;
   return `${asmSummary(items, admin)}${open.length ? asmGrouped(open, who, me) : '<div class="card muted">No machine pending.</div>'}
     ${admin && done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Assembled – last 30 days (${done.length})</b></summary><div style="margin-top:10px">${asmGrouped(done, who, me)}</div></details>` : ''}`;
 }

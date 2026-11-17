@@ -1294,6 +1294,8 @@ function asmFind(req, res, check) {
 }
 // The unit where a machine was assembled (it may later be transferred to another unit's godown).
 const asmUnitOf = (m) => ((m.transfers || [])[0] || {}).from || m.unitId;
+// Assembled and still in the godown of the unit that assembled it (not transferred, not dispatched).
+const inOwnGodown = (m) => m.status === 'done' && m.location === 'godown' && !(m.transfers || []).length;
 const asmList = (filter) => db().assembly.filter(filter).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (b.completedAt || b.createdAt || '').localeCompare(a.completedAt || a.createdAt || '')).map(asmView);
 const recentDone = (m, days = 30) => m.status !== 'done' || (m.completedAt || '') >= new Date(Date.now() - days * 86400000).toISOString();
 const monthOf = (q) => (/^\d{4}-\d{2}$/.test(String(q || '')) ? q : today().slice(0, 7));
@@ -1313,7 +1315,8 @@ unit.get('/assembly', (req, res) => {
   res.json({
     // assembly work of this unit: machines assembled here (not ones transferred in, not old stock)
     // open work only – assembled machines are shown to the admin only
-    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && !['cancelled', 'done', 'arrived'].includes(m.status)),
+    // open work + assembled machines still in this unit's godown (gone once transferred or dispatched)
+    items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && (!['cancelled', 'done', 'arrived'].includes(m.status) || inOwnGodown(m))),
     arrived: arrivedOf(req.user.id),
     leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
     maxPending: asmSettings().maxPending,
@@ -1339,7 +1342,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     // own machines, plus machines this leader entered (so a wrong entry can be corrected)
     // open work only (assembled machines: admin only)
     arrived: p.role === 'leader' ? arrivedOf(p.unitId) : [],
-    items: asmList((m) => !['cancelled', 'done', 'arrived'].includes(m.status) && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
+    items: asmList((m) => (!['cancelled', 'done', 'arrived'].includes(m.status) || (p.role === 'leader' && m.leaderId === p.id && inOwnGodown(m))) && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
     unitId: p.unitId,
     unitName: unitName(p.unitId),
     stock: p.role === 'leader' ? ASM.stock(db(), p.unitId) : [],
