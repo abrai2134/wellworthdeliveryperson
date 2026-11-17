@@ -2391,15 +2391,34 @@ admin.post('/fab/:id/cancel', (req, res) => {
   store.save();
   res.json({ ok: true });
 });
+// The whole fab rate list from the editor (admin or fab manager). New rows remember who added them.
+function readFabRates(rows, cur, by) {
+  const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
+  const out = [];
+  for (const x of rows) {
+    const model = canonModel(x && x.model);
+    if (!model || out.some((o) => ASM.sameRate(o.model, model))) continue; // no empty / double rows
+    const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model));
+    out.push({ model, rate: money(x && x.rate), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
+  }
+  return out.slice(0, 300);
+}
+app.put('/api/staff/fab/rates/all', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager');
+  if (!Array.isArray(req.body.contractorRates)) return bad(res, 'Nothing to save');
+  const cur = FAB.settings(db());
+  db().settings.fab = { ...cur, contractorRates: readFabRates(req.body.contractorRates, cur, p.name) };
+  refreshFabAmounts();
+  store.save();
+  res.json({ ok: true });
+});
 admin.put('/fab/settings', (req, res) => {
   const cur = FAB.settings(db());
-  const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
   db().settings.fab = {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
-    contractorRates: Array.isArray(req.body.contractorRates)
-      ? req.body.contractorRates.map((x) => { const model = canonModel(x && x.model); const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model)); return { model, rate: money(x && x.rate), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {}) }; }).filter((x) => x.model).slice(0, 300)
-      : cur.contractorRates || [],
+    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
   };
   refreshFabAmounts();
   fabAssign();

@@ -2579,33 +2579,15 @@ async function renderFabStaff() {
   bindFab(wrap, '/staff/fab', r.items, renderStaff, { leaders: r.unitLeaders, helpers: r.unitHelpers });
   const add = document.getElementById('fab-add');
   if (add) add.onclick = fabAddForm('/staff/fab', renderStaff, r.units, r.unitId);
-  // fab manager: rate list + add a rate for a new model
+  // fab manager: full fab rate editor (same as the admin)
   const ratesBtn = document.getElementById('fab-rates-btn');
   if (ratesBtn) ratesBtn.onclick = async () => {
     const [rt, models] = await Promise.all([api('/staff/fab/rates'), loadMachineList()]);
-    openModal(`<h2>💰 Fab contractor rates</h2>
-      <details><summary class="small"><b>Rates (${rt.rates.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Model no.</th><th class="num">Rate ₹</th></tr></thead><tbody>
-        ${rt.rates.map((x, i) => `<tr><td>${esc(x.model)}${x.addedBy ? ` <span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}</td><td class="num">${x.rate}</td><td>${x.addedBy === rt.me ? `<button type="button" class="link small" data-fr-edit="${i}">✎ Edit</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No rate yet.</td></tr>'}</tbody></table></div></details>
-      <h3 style="margin-top:12px">Add a new model</h3><p class="small muted">Only models without a rate can be added here. Existing rates are changed by the admin.</p>
-      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-fm" required></div><div><label>Rate ₹ *</label><input name="rate" type="number" min="1" required></div></div>
-      <datalist id="asm-models-fm">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
-      <div class="actions"><button value="cancel">Close</button><button class="primary" value="ok">Add rate</button></div>`,
-    async (fd) => { const x = await api('/staff/fab/rates', { method: 'POST', body: Object.fromEntries(fd) }); toast(`Rate added for ${x.model}`); renderStaff(); });
-    // ✎ Edit a rate this fab manager added (wrong model name / rate)
-    modalBody.querySelectorAll('[data-fr-edit]').forEach((b) => (b.onclick = () => {
-      const x = rt.rates[Number(b.dataset.frEdit)];
-      openModal(`<h2>✎ Edit fab rate</h2><div class="muted small">Added by you: <b>${esc(x.model)}</b> · ₹${x.rate}</div>
-        <label>⚙️ Correct model no. *</label><input name="model" list="asm-models-fe" required value="${esc(x.model)}">
-        <datalist id="asm-models-fe">${models.map((y) => `<option value="${esc(typeof y === 'string' ? y : y.label)}"></option>`).join('')}</datalist>
-        <label>Rate ₹ *</label><input name="rate" type="number" min="1" required value="${esc(x.rate)}">
-        <p class="small muted">Open fab machines of your unit entered as "${esc(x.model)}" are renamed too. If the correct model already has a rate, this wrong entry is removed and that rate is kept.</p>
-        <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
-      async (fd) => {
-        const r = await api('/staff/fab/rates', { method: 'PUT', body: { oldModel: x.model, model: fd.get('model'), rate: fd.get('rate') } });
-        toast(`${r.merged ? `Merged into ${r.model} (its existing rate stays)` : 'Saved'}${r.renamed ? ` – ${r.renamed} fab machine(s) renamed` : ''}`);
-        renderStaff();
-      });
-    }));
+    let collect = () => [];
+    openModal(`<div id="fm-rates">${fabRatesFormHtml(models).replace('<div style="margin-top:10px"><button class="primary">Save rates</button></div>', '')}</div>
+      <div class="actions"><button value="cancel">Close</button><button class="primary" value="ok">Save rates</button></div>`,
+    async () => { await api('/staff/fab/rates/all', { method: 'PUT', body: { contractorRates: collect() } }); toast('Fab rates saved'); renderStaff(); });
+    collect = bindFabRates(document.getElementById('fm-rates'), rt.rates, null);
   };
   document.getElementById('fab-month').onchange = (e) => { state.fabMonth = e.target.value; renderStaff(); };
 }
@@ -2646,6 +2628,37 @@ async function renderUnitFab() {
   document.getElementById('ufab-add').onclick = fabAddForm('/unit/fab', renderUnit, [{ id: state.me.id, name: state.me.name }], state.me.id);
 }
 
+// Fab rate editor (admin and fab manager): rows of model + ₹, ⧉ Copy, ✕, + Add model, Save.
+function fabRatesFormHtml(models) {
+  return `<h2 style="margin:0">💰 Fab contractor rate per model</h2>
+    <div class="muted small">Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.</div>
+    <div class="fr-rows"></div>
+    <div class="row"><button type="button" class="link fr-add">+ Add model</button></div>
+    <datalist id="asm-models-fr">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+    <div style="margin-top:10px"><button class="primary">Save rates</button></div>`;
+}
+function bindFabRates(form, rates, url, method, reload) {
+  const frRows = form.querySelector('.fr-rows');
+  const addFr = (x, after) => {
+    const div = document.createElement('div');
+    div.className = 'row fr-row';
+    div.style.cssText = 'margin-top:6px;flex-wrap:nowrap';
+    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>Rate ₹</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:90px">${x.addedBy ? `<span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
+    div.querySelector('.fr-del').onclick = () => div.remove();
+    div.querySelector('.fr-copy').onclick = () => addFr({ model: '', rate: div.querySelector('.fr-r').value }, div);
+    if (after) after.after(div); else frRows.appendChild(div);
+  };
+  rates.forEach((x) => addFr(x));
+  if (!rates.length) addFr({});
+  form.querySelector('.fr-add').onclick = () => addFr({});
+  const collect = () => [...frRows.querySelectorAll('.fr-row')].map((d) => ({ model: d.querySelector('.fr-m').value, rate: d.querySelector('.fr-r').value })).filter((x) => x.model.trim());
+  if (url) form.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(url, { method, body: { contractorRates: collect() } }); toast('Fab rates saved'); reload(); } catch (ex) { toast(ex.message, true); }
+  };
+  return collect;
+}
+
 // Admin: 🏭 Fab & Painting tab
 async function adminFab(main) {
   const r = await api('/admin/fab' + (state.fabBoardMonth ? '?month=' + state.fabBoardMonth : ''));
@@ -2668,12 +2681,7 @@ async function adminFab(main) {
       <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Fab leader</th><th>Type</th><th class="num">Fab done</th><th class="num">Contractor amount</th></tr></thead><tbody>
       ${r.board.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b><div class="small muted">${esc(x.unitName)}</div></td><td>${x.payType === 'contractor' ? 'Contractor' : x.payType === 'payroll' ? 'Payroll' : '<span class="muted">—</span>'}</td><td class="num"><b>${x.done}</b></td><td class="num">${x.payType === 'contractor' ? `<b>₹${x.amount}</b>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No fab leader yet.</td></tr>'}
       </tbody></table></div><div class="small muted" style="margin-top:4px">Contractor fab leaders earn the model's fab rate for each machine marked Fab done (fixed when it is done).</div></div>
-    <form class="card section" id="fab-rates"><h2 style="margin:0">💰 Fab contractor rate per model</h2>
-      <div class="muted small">Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.</div>
-      <div id="fr-rows"></div>
-      <div class="row"><button type="button" class="link" id="fr-add">+ Add model</button></div>
-      <datalist id="asm-models-fr">${(await loadMachineList()).map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
-      <div style="margin-top:10px"><button class="primary">Save rates</button></div></form>
+    <form class="card section" id="fab-rates">${fabRatesFormHtml(await loadMachineList())}</form>
     <h1 style="margin:24px 0 0">🎨 Painting</h1>
     <div id="adm-paint">${paintingHtml(r.painting)}</div>
     <div class="card section"><div class="row"><h2 style="margin:0">🎨 Painting logins</h2><div class="spacer"></div><button class="primary small" id="pnt-add">+ Add painting login</button></div>
@@ -2688,25 +2696,7 @@ async function adminFab(main) {
   document.getElementById('fab-add-mgr').onclick = () => personForm(null, null, 'fabmanager');
   main.querySelectorAll('[data-edit-fp]').forEach((b) => (b.onclick = () => personForm(personOf(b.dataset.editFp))));
   document.getElementById('fab-board-month').onchange = (e) => { state.fabBoardMonth = e.target.value; renderAdmin(); };
-  // contractor rate rows (model + ₹), with Copy to start a new row at the same rate
-  const frRows = document.getElementById('fr-rows');
-  const addFr = (x, after) => {
-    const div = document.createElement('div');
-    div.className = 'row fr-row';
-    div.style.cssText = 'margin-top:6px;flex-wrap:nowrap';
-    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>Rate ₹</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:90px">${x.addedBy ? `<span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
-    div.querySelector('.fr-del').onclick = () => div.remove();
-    div.querySelector('.fr-copy').onclick = () => addFr({ model: '', rate: div.querySelector('.fr-r').value }, div);
-    if (after) after.after(div); else frRows.appendChild(div);
-  };
-  (r.settings.contractorRates || []).forEach((x) => addFr(x));
-  if (!(r.settings.contractorRates || []).length) addFr({});
-  document.getElementById('fr-add').onclick = () => addFr({});
-  document.getElementById('fab-rates').onsubmit = async (e) => {
-    e.preventDefault();
-    const contractorRates = [...frRows.querySelectorAll('.fr-row')].map((d) => ({ model: d.querySelector('.fr-m').value, rate: d.querySelector('.fr-r').value })).filter((x) => x.model.trim());
-    try { await api('/admin/fab/settings', { method: 'PUT', body: { contractorRates } }); toast('Fab rates saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
-  };
+  bindFabRates(document.getElementById('fab-rates'), r.settings.contractorRates || [], '/admin/fab/settings', 'PUT', renderAdmin);
   document.getElementById('fab-set').onsubmit = async (e) => { e.preventDefault(); try { await api('/admin/fab/settings', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Saved'); reload(); } catch (ex) { toast(ex.message, true); } };
   document.getElementById('pnt-add').onclick = () => openModal(`<h2>+ Painting login</h2>
       <label>Name *</label><input name="name" required><label>Login ID *</label><input name="username" required placeholder="e.g. paint1"><label>Password *</label><input name="password" required minlength="4">
