@@ -1849,15 +1849,26 @@ function sendFromGodown(body, who) {
 function godownHistory(days = 30) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const rows = [];
+  // which machine left: how it came into the godown (assembled by whom / old stock / transfer) and when
+  const what = (m) => {
+    const when = String(m.source === 'stock' ? m.createdAt || m.godownAt : m.completedAt || m.godownAt || '').slice(0, 16);
+    const how = m.source === 'stock' ? `old stock by ${String(m.createdBy || '?').replace(/ \(unit\)$/, '')}` : m.leaderId ? `assembled by ${personName(m.leaderId)}` : 'old machine';
+    return { how, when };
+  };
   for (const m of db().assembly) {
     const photoAt = (at, kind) => ((m.dispatchPhotos || []).find((p) => p.at === at && p.kind === kind) || (m.dispatchPhotos || []).find((p) => p.kind === kind && Math.abs(Date.parse(p.at) - Date.parse(at)) < 60000) || {}).file;
-    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0, photo: photoAt(m.dispatchedAt, 'client') });
-    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '', booked: t.bookedParty || '', photo: photoAt(t.at, 'unit') });
+    if (m.location === 'dispatched' && (m.dispatchedAt || '') >= since) rows.push({ at: m.dispatchedAt, kind: 'client', model: m.model, from: unitName(m.unitId), to: m.dispatchParty, by: m.dispatchedBy || '', leader: personName(m.leaderId), incentive: (m.dispatchIncentive && m.dispatchIncentive.amount) || 0, photo: photoAt(m.dispatchedAt, 'client'), what: what(m) });
+    for (const t of m.transfers || []) if ((t.at || '') >= since) rows.push({ at: t.at, kind: 'unit', model: m.model, from: unitName(t.from), to: unitName(t.to), by: t.by || '', booked: t.bookedParty || '', photo: photoAt(t.at, 'unit'), what: what(m) });
   }
   // group same moment + model + destination
   const g = {};
-  for (const r of rows) { const k = [r.at, r.kind, r.model, r.from, r.to, r.booked || ''].join('|'); (g[k] ||= { ...r, qty: 0, incentive: 0 }).qty++; g[k].incentive += r.incentive || 0; }
-  return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100);
+  for (const r of rows) {
+    const k = [r.at, r.kind, r.model, r.from, r.to, r.booked || ''].join('|');
+    const x = (g[k] ||= { ...r, qty: 0, incentive: 0, items: {} });
+    x.qty++; x.incentive += r.incentive || 0;
+    const ik = r.what.how + '|' + r.what.when; (x.items[ik] ||= { ...r.what, qty: 0 }).qty++;
+  }
+  return Object.values(g).map(({ what, ...x }) => ({ ...x, items: Object.values(x.items) })).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100);
 }
 app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const month = monthOf(req.query.month);
