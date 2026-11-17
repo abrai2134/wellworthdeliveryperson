@@ -145,11 +145,13 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
       </form>
     </div>
     <p class="muted small" style="text-align:center">Ask your admin for your login ID and password.</p>
-    <div class="card" style="margin-top:12px"><h3 style="margin:0 0 6px">🔍 Find a machine <span class="small muted">(no login needed)</span></h3>
-      <input id="pub-find" autocomplete="off" placeholder="type a model no. e.g. FT24BK">
-      <div id="pub-find-out" class="small" style="margin-top:8px"></div></div>
-    <p class="muted small" style="text-align:center;opacity:.7">Version ${esc(state.pub.version || '')}</p>
-  </div>`;
+  </div>
+  <div class="card pub-find"><h3 style="margin:0 0 6px">🔍 Find a machine <span class="small muted">(no login needed)</span></h3>
+      <div class="row" style="flex-wrap:nowrap"><input id="pub-find" autocomplete="off" placeholder="type a model no. e.g. FT24BK" style="flex:2"><select id="pub-unit" style="flex:1;min-width:120px"><option value="">All units</option></select></div>
+      <div class="small muted" style="margin-top:4px">Type a model no., or choose a unit to see everything in it.</div>
+      <div id="pub-find-out" class="small" style="margin-top:8px"></div>
+  </div>
+  <p class="muted small" style="text-align:center;opacity:.7">Version ${esc(state.pub.version || '')}</p>`;
   $app.querySelectorAll('[data-role]').forEach((b) => (b.onclick = () => { localStorageSet('role', b.dataset.role); renderLogin(b.dataset.role); }));
   // 👁 Show / Hide the password so a wrong entry can be seen and corrected
   document.getElementById('pw-eye').onclick = () => {
@@ -161,25 +163,31 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
   };
   // public search: where is a model (fab / painting / assembly / godown) per unit
   let findTimer = null;
-  document.getElementById('pub-find').oninput = (e) => {
+  const unitSel = document.getElementById('pub-unit');
+  api('/public/find?q=').then((r) => { unitSel.innerHTML += (r.units || []).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join(''); }).catch(() => {});
+  const runFind = () => {
     clearTimeout(findTimer);
-    const q = e.target.value.trim();
+    const q = document.getElementById('pub-find').value.trim();
+    const unitId = unitSel.value;
     const out = document.getElementById('pub-find-out');
-    if (q.replace(/[^a-z0-9]/gi, '').length < 2) { out.innerHTML = ''; return; }
+    if (q.replace(/[^a-z0-9]/gi, '').length < 2 && !unitId) { out.innerHTML = ''; return; }
     findTimer = setTimeout(async () => {
       try {
-        const r = await api('/public/find?q=' + encodeURIComponent(q));
+        const r = await api('/public/find?q=' + encodeURIComponent(q) + '&unitId=' + encodeURIComponent(unitId));
         const n = (v) => (v ? `<b>${v}</b>` : '<span class="muted">–</span>');
-        out.innerHTML = r.models.length ? r.models.map((m) => `<div style="margin-top:8px"><b>⚙️ ${esc(m.model)}</b><div class="table-wrap"><table><thead><tr><th>Unit</th><th class="num">🏭 Fab</th><th class="num">🎨 Painting</th><th class="num">🛠️ Assembly</th><th class="num">🏬 Godown</th></tr></thead><tbody>
-          ${m.units.map((u) => `<tr><td>${esc(u.unit)}</td>
-            <td class="num">${n(u.fabNotStarted + u.inFab)}${u.inFab ? `<div class="muted">${u.inFab} in fab</div>` : ''}</td>
-            <td class="num">${n(u.paintComing + u.inPainting)}${u.paintComing ? `<div class="muted">${u.paintComing} coming</div>` : ''}</td>
-            <td class="num">${n(u.arrived + u.notStarted + u.assembling)}${u.assembling ? `<div class="muted">${u.assembling} assembling</div>` : ''}${u.arrived ? `<div class="muted">${u.arrived} arrived</div>` : ''}</td>
-            <td class="num">${n(u.godown)}${u.booked ? `<div class="muted">${u.booked} booked</div>` : ''}</td></tr>`).join('')}</tbody></table></div></div>`).join('')
+        const cell = (main, sub) => `<td class="num">${n(main)}${sub ? `<div class="muted">${sub}</div>` : ''}</td>`;
+        const rows = r.models.flatMap((m) => m.units.map((u, k) => `<tr>${k === 0 ? `<td rowspan="${m.units.length}"><b>${esc(m.model)}</b></td>` : ''}<td>${esc(u.unit)}</td>
+            ${cell(u.fabNotStarted + u.inFab, u.inFab ? `${u.inFab} in fab` : '')}
+            ${cell(u.paintComing + u.inPainting, u.paintComing ? `${u.paintComing} coming` : '')}
+            ${cell(u.arrived + u.notStarted + u.assembling, [u.assembling ? `${u.assembling} assembling` : '', u.arrived ? `${u.arrived} arrived` : ''].filter(Boolean).join('<br>'))}
+            ${cell(u.godown, u.booked ? `${u.booked} booked` : '')}</tr>`));
+        out.innerHTML = r.models.length ? `<div class="table-wrap"><table><thead><tr><th>Model no.</th><th>Unit</th><th class="num">🏭 Fab</th><th class="num">🎨 Painting</th><th class="num">🛠️ Assembly</th><th class="num">🏬 Godown</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
           : '<span class="muted">No machine of this model in fab, painting, assembly or godown.</span>';
       } catch (ex) { out.textContent = ex.message; }
     }, 300);
   };
+  document.getElementById('pub-find').oninput = runFind;
+  unitSel.onchange = runFind;
   const form = document.getElementById('login-form');
   form.onsubmit = async (e) => {
     e.preventDefault();
