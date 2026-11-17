@@ -2310,6 +2310,17 @@ document.addEventListener('click', async (e) => {
   modalBody.querySelectorAll('[name=entry]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; q.value = e.qty; }));
 });
 
+// Rate lists (assembly / dispatch / fab): warn at once when a model is already in the same list.
+document.addEventListener('change', (e) => {
+  const cls = ['ir-m', 'dr-m', 'fr-m'].find((c) => e.target.classList && e.target.classList.contains(c));
+  if (!cls) return;
+  const k = (v) => String(v || '').toUpperCase().replace(/\s+/g, '');
+  const mine = k(e.target.value);
+  const box = e.target.closest('form, #modal-body, .card') || document;
+  const dup = mine && [...box.querySelectorAll('.' + cls)].some((x) => x !== e.target && k(x.value) === mine);
+  e.target.style.borderColor = dup ? '#d33' : '';
+  if (dup) toast(`"${e.target.value}" is already in this list – the same model cannot be added twice`, true);
+});
 // Recent dispatches: search by model no. / by / from / to (ignores ~, spaces and capitals).
 document.addEventListener('input', (e) => {
   if (!e.target.classList || !e.target.classList.contains('hist-search')) return;

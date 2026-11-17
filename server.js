@@ -1742,8 +1742,38 @@ app.post('/api/staff/assembly/incentives', need('staff'), (req, res) => {
   res.json({ ok: true });
 });
 
+// A rate list may hold each model only once (exact name, ignoring capitals and spaces).
+function duplicateIn(rows, label) {
+  const seen = [];
+  for (const x of rows || []) {
+    const model = canonModel(x && x.model);
+    if (!model) continue;
+    if (seen.some((m) => ASM.sameRate(m, model))) return `"${model}" is twice in the ${label} list – the same model cannot be added twice. Remove one row and save again.`;
+    seen.push(model);
+  }
+  return '';
+}
+// Clean lists that already hold a model twice: keep the row with the highest rate.
+function dedupeRates(list, score) {
+  const out = [];
+  for (const x of list || []) {
+    const i = out.findIndex((o) => ASM.sameRate(o.model, x.model));
+    if (i < 0) out.push(x); else if (score(x) > score(out[i])) out[i] = x;
+  }
+  return out;
+}
+{
+  const a = db().settings.assembly || {};
+  const f = db().settings.fab || {};
+  const before = JSON.stringify([a.incentives, a.dispatchIncentives, f.contractorRates]);
+  if (a.incentives) a.incentives = dedupeRates(a.incentives, (x) => (Number(x.leader) || 0) + (Number(x.installer) || 0));
+  if (a.dispatchIncentives) a.dispatchIncentives = dedupeRates(a.dispatchIncentives, (x) => Number(x.amount) || 0);
+  if (f.contractorRates) f.contractorRates = dedupeRates(f.contractorRates, (x) => Number(x.rate) || 0);
+  if (JSON.stringify([a.incentives, a.dispatchIncentives, f.contractorRates]) !== before) store.save();
+}
 admin.put('/assembly/settings', (req, res) => {
   const b = req.body;
+  { const dup = (Array.isArray(b.incentives) && duplicateIn(b.incentives, 'assembly incentive')) || (Array.isArray(b.dispatchIncentives) && duplicateIn(b.dispatchIncentives, 'dispatch incentive')); if (dup) return bad(res, dup); }
   const cur = asmSettings();
   const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
   db().settings.assembly = {
@@ -2493,6 +2523,7 @@ app.put('/api/staff/fab/rates/all', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'fabmanager') return bad(res, 'Only the fab manager');
   if (!Array.isArray(req.body.contractorRates)) return bad(res, 'Nothing to save');
+  { const dup = duplicateIn(req.body.contractorRates, 'fab rate'); if (dup) return bad(res, dup); }
   const cur = FAB.settings(db());
   db().settings.fab = { ...cur, contractorRates: readFabRates(req.body.contractorRates, cur, p.name) };
   refreshFabAmounts();
@@ -2500,6 +2531,7 @@ app.put('/api/staff/fab/rates/all', need('staff'), (req, res) => {
   res.json({ ok: true });
 });
 admin.put('/fab/settings', (req, res) => {
+  { const dup = Array.isArray(req.body.contractorRates) && duplicateIn(req.body.contractorRates, 'fab rate'); if (dup) return bad(res, dup); }
   const cur = FAB.settings(db());
   db().settings.fab = {
     ...cur,
