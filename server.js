@@ -140,7 +140,10 @@ app.get('/api/public/find', (req, res) => {
   const unitList = db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name }));
   const onlyUnit = str(req.query.unitId);
   if (q.length < 2 && !onlyUnit) return res.json({ models: [], units: unitList });
-  const hit = (model) => String(model || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(q);
+  // A full model no. (e.g. FT~30BK) shows only that model – not FT~30BKSB; otherwise partial matches.
+  const allModels = [...db().fab, ...db().painting, ...db().assembly].map((m) => m.model);
+  const exact = q && allModels.some((md) => ASM.key(md) === q || ASM.baseKey(md) === q);
+  const hit = (model) => (exact ? ASM.key(model) === q || ASM.baseKey(model) === q : String(model || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(q));
   const inUnit = (unitId) => !onlyUnit || unitId === onlyUnit;
   const units = Object.fromEntries(db().units.filter((u) => !u.deleted).map((u) => [u.id, u.name]));
   const out = {};
