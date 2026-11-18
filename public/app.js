@@ -2422,10 +2422,10 @@ function bindSend(root, url, units, reload) {
   }));
 }
 
-function dispatchBoardHtml(board, month, picker) {
+function dispatchBoardHtml(board, month, picker, unitLabel) {
   const sum = (k) => board.reduce((t, x) => t + (x[k] || 0), 0);
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Dispatch scoreboard</h2><div class="spacer"></div>${picker ? `<input type="month" id="dsp-month" value="${esc(month)}" style="width:auto">` : `<span class="badge">${esc(month)}</span>`}</div>
-    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">Client incentive</th><th class="num">To other units</th><th class="num">Other unit incentive</th><th class="num">Total incentive</th></tr></thead><tbody>
+    ${board.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Dispatch person</th><th class="num">To clients</th><th class="num">Client incentive</th><th class="num">${esc(unitLabel || 'To other units')}</th><th class="num">${unitLabel ? 'Transfer bonus' : 'Other unit incentive'}</th><th class="num">Total incentive</th></tr></thead><tbody>
     ${board.map((x, i) => `<tr><td>${i < 3 && x.toClient ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td><b>${esc(x.name)}</b></td><td class="num">${x.toClient}</td><td class="num">₹${x.clientIncentive || 0}</td><td class="num">${x.toUnit}</td><td class="num">₹${x.unitBonus || 0}</td><td class="num"><b>₹${x.incentive}</b></td></tr>`).join('')}
     <tr><td></td><td><b>Total</b></td><td class="num"><b>${sum('toClient')}</b></td><td class="num"><b>₹${sum('clientIncentive')}</b></td><td class="num"><b>${sum('toUnit')}</b></td><td class="num"><b>₹${sum('unitBonus')}</b></td><td class="num"><b>₹${sum('incentive')}</b></td></tr></tbody></table></div>` : '<p class="muted">No dispatch logins yet.</p>'}</div>`;
 }
@@ -2462,9 +2462,9 @@ async function renderDispatch() {
   wrap.innerHTML = `<div class="hero"><div class="label">🏆 My dispatch · ${esc(r.month)}</div>
       <div class="big">₹${r.me.incentive} incentive</div>
       <div class="line">🚚 ${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients: <b>₹${r.me.clientIncentive}</b></div>
-      <div class="line">🔁 ${r.me.toBonusUnit} sent to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')}: <b>₹${r.me.unitBonus}</b> transfer bonus${r.me.toUnit > r.me.toBonusUnit ? ` <span class="small">(${r.me.toUnit - r.me.toBonusUnit} sent to other units – no bonus)</span>` : ''}</div></div>
+      <div class="line">🔁 ${r.me.toBonusUnit} sent to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')}: <b>₹${r.me.unitBonus}</b> transfer bonus</div></div>
     <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
-    ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true)}${historyHtml(r.history)}`;
+    ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true, 'To ' + ((r.bonusUnitNames || []).join(' / ') || 'bonus unit'))}${historyHtml(r.history)}`;
   document.getElementById('add-stock').onclick = () => oldStockForm('/dispatch/stock', r.units, renderDispatch);
   const mi = document.getElementById('dsp-month');
   if (mi) mi.onchange = (e) => { state.dspMonth = e.target.value; renderDispatch(); };

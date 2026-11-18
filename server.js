@@ -1952,9 +1952,10 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
   const mine = board.find((r) => r.id === req.user.id);
   res.json({
     stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory(),
-    month, board,
-    me: mine ? { toClient: mine.toClient, toUnit: mine.toUnit, toBonusUnit: mine.toBonusUnit, clientIncentive: mine.clientIncentive, unitBonus: mine.unitBonus, incentive: mine.incentive }
-      : { toClient: 0, toUnit: 0, toBonusUnit: 0, clientIncentive: 0, unitBonus: 0, incentive: 0 },
+    // transfers to units without a bonus are shown only to the admin
+    month, board: board.map(({ toUnit, ...x }) => ({ ...x, toUnit: x.toBonusUnit || 0 })),
+    me: mine ? { toClient: mine.toClient, toBonusUnit: mine.toBonusUnit, clientIncentive: mine.clientIncentive, unitBonus: mine.unitBonus, incentive: mine.incentive }
+      : { toClient: 0, toBonusUnit: 0, clientIncentive: 0, unitBonus: 0, incentive: 0 },
     bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
   });
 });
