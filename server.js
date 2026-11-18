@@ -2753,6 +2753,23 @@ function fabMove(body, by, unitId) {
   const from = str(body.fromLeaderId);
   const to = str(body.toLeaderId);
   const model = str(body.model, 120);
+  if (body.toBend) {
+    // ⇄ Move back to Bending: the machines leave fab (not shown there any more) and go to the
+    // unit's bending again, shared fairly between its bending leaders
+    const list = db().fab.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+    if (!list.length) return { error: 'No machine of this model is waiting to start with that fab leader' };
+    const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
+    const at = new Date().toISOString();
+    for (const m of list.slice(0, qty)) {
+      m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = by; m.cancelReason = 'Moved to bending'; m.movedToBend = true;
+      db().bend.push({ id: newId('bnd'), unitId: m.unitId, model: m.model, status: 'waiting', createdAt: at, createdBy: `${by} (moved from fab)`, creator: { role: 'fab', id: m.leaderId }, fromFabId: m.id, note: '' });
+      m.toBendId = db().bend[db().bend.length - 1].id;
+    }
+    bendAssign();
+    fabAssign();
+    store.save();
+    return { value: { id: '', moved: qty } };
+  }
   if (!to || to === from) return { error: 'Choose the fab leader to move them to' };
   const toP = db().people.find((p) => p.id === to && p.role === 'fableader' && p.active && !p.deleted);
   if (!toP) return { error: 'Choose a fab team leader' };

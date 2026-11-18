@@ -2712,13 +2712,15 @@ document.addEventListener('click', (e) => {
   const [url, fromId, unitId, max] = b.dataset.fabMove.split('|');
   const leaders = (((state.leadersByKind || {})[b.dataset.kind || 'fab']) || state.fabLeaders || []).filter((l) => l.id !== fromId && (!unitId || !l.unitId || l.unitId === unitId));
   openModal(`<h2>⇄ Move ${(STG[b.dataset.kind] || STG.fab).name} machines</h2><div class="muted">${esc(b.dataset.model)} · from <b>${esc(b.dataset.name)}</b> (${max} not started)</div>
-    <label>Move to ${(STG[b.dataset.kind] || STG.fab).leader} *</label><select name="toLeaderId" required><option value="">— choose —</option>${leaders.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}${l.pending !== undefined ? ` (${l.pending} pending)` : ''}</option>`).join('')}</select>
+    <label>Move to ${(STG[b.dataset.kind] || STG.fab).leader} *</label><select name="toLeaderId" required><option value="">— choose —</option>${(b.dataset.kind || 'fab') === 'fab' ? '<option value="__bend">🔩 Back to Bending (leaves fab)</option>' : ''}${leaders.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}${l.pending !== undefined ? ` (${l.pending} pending)` : ''}</option>`).join('')}</select>
     <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="1" required>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⇄ Move</button></div>`,
   async (fd) => {
     if (!fd.get('toLeaderId')) throw new Error('Choose the leader');
-    const r = await api(url, { method: 'POST', body: { fromLeaderId: fromId, toLeaderId: fd.get('toLeaderId'), model: b.dataset.model, qty: fd.get('qty') } });
-    toast(`${r.moved} moved`);
+    const toBend = fd.get('toLeaderId') === '__bend';
+    if (toBend && !confirm(`Move ${fd.get('qty')} × ${b.dataset.model} back to Bending? They will not show in Fab any more.`)) return;
+    const r = await api(url, { method: 'POST', body: { fromLeaderId: fromId, toLeaderId: toBend ? '' : fd.get('toLeaderId'), toBend, model: b.dataset.model, qty: fd.get('qty') } });
+    toast(toBend ? `${r.moved} moved to Bending` : `${r.moved} moved`);
     render();
   });
 });
