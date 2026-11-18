@@ -224,6 +224,7 @@ function personView(p) {
     canLogin: !!p.passHash,
     active: !!p.active,
     payType: p.payType || '',
+    incentiveCut: p.incentiveCut || 0,
   };
 }
 
@@ -879,7 +880,7 @@ function readPerson(body, existing) {
   }
   return {
     // Contractor (paid per production) or Payroll (gets incentive) – used for rates later
-    value: { name, phone, username, role, unitId, backup: !!body.backup, active: body.active !== false, payType: ['contractor', 'payroll'].includes(str(body.payType)) ? str(body.payType) : '' },
+    value: { name, phone, username, role, unitId, backup: !!body.backup, active: body.active !== false, incentiveCut: Math.max(0, Math.min(100, Number(body.incentiveCut) || 0)), payType: ['contractor', 'payroll'].includes(str(body.payType)) ? str(body.payType) : '' },
     password,
   };
 }
@@ -1165,6 +1166,28 @@ function asmView(m) {
   };
 }
 const asmSettings = () => ASM.settings(db());
+// Incentive reduction % per team leader / dispatch login (e.g. 10%). Only the team leader's share
+// and the dispatch incentive are reduced – installation persons and helpers never are.
+const cutOf = (acc) => Math.max(0, Math.min(100, Number(acc && acc.incentiveCut) || 0));
+function asmIncentive(model, leaderId) {
+  const inc = { ...ASM.incentiveFor(db(), model) };
+  const cut = cutOf(db().people.find((p) => p.id === leaderId));
+  if (cut) { inc.leaderFull = inc.leader; inc.leader = Math.round((inc.leader * (100 - cut)) / 100); inc.leaderCut = cut; }
+  return inc;
+}
+function dispatchCut(amount, dispatcherId) {
+  const cut = cutOf(db().dispatchers.find((d) => d.id === dispatcherId));
+  return cut ? Math.round((amount * (100 - cut)) / 100) : amount;
+}
+// One time: 10% reduction for the 814 team leaders Satish, Tamanna, Sandeep (and their dispatch logins).
+if (!db().settings.cut814v1) {
+  const names = ['SATISH', 'TAMANNA', 'SANDEEP'];
+  const u814 = db().units.find((u) => !u.deleted && String(u.name).trim() === '814');
+  for (const p of db().people) if (u814 && p.unitId === u814.id && p.role === 'leader' && !p.deleted && names.includes(String(p.name).trim().toUpperCase()) && !p.incentiveCut) p.incentiveCut = 10;
+  for (const d of db().dispatchers) if (!d.deleted && names.includes(String(d.name).trim().toUpperCase()) && !d.incentiveCut) d.incentiveCut = 10;
+  db().settings.cut814v1 = true;
+  store.save();
+}
 // Transfer bonus cut to 50%: switch the saved slabs over once, unless the admin had changed them.
 {
   const a = db().settings.assembly;
@@ -1270,7 +1293,7 @@ function asmEditModel(m, body, by, scope, user) {
   for (const x of list) {
     (x.modelEdits = x.modelEdits || []).push({ from: old, to: model, by, at });
     x.model = model;
-    if (x.status === 'done') x.incentive = ASM.incentiveFor(db(), model); // incentive follows the right model
+    if (x.status === 'done') x.incentive = asmIncentive(model, x.leaderId); // incentive follows the right model
   }
   store.save();
   return { value: { id: m.id, count: list.length } };
@@ -1314,7 +1337,7 @@ function asmComplete(m, body, by) {
   m.completedAt = t.value.completed;
   m.status = 'done';
   m.completedBy = by;
-  m.incentive = ASM.incentiveFor(db(), m.model);
+  m.incentive = asmIncentive(m.model, m.leaderId);
   asmAssign(); // the leader may now be under the pending limit
   store.save();
   return { value: m };
@@ -1518,7 +1541,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
       id: newId('asm'), unitId: p.unitId, model, status: completed ? 'done' : 'started', source: 'old', leaderId: p.id, installerId, helperId,
       createdAt: new Date().toISOString(), assignedAt: t.value.started, startedAt: t.value.started, completedAt: completed ? t.value.completed : null,
       createdBy: p.name, entryBy: `${p.name} (old entry)`, timesEditedBy: p.name, note: str(req.body.note, 200), manual: true,
-      ...(completed ? { incentive: ASM.incentiveFor(db(), model), ...loc.value } : {}),
+      ...(completed ? { incentive: asmIncentive(model, p.id), ...loc.value } : {}),
     };
     made.push(m);
     db().assembly.push(m);
@@ -1555,7 +1578,7 @@ admin.get('/assembly', (req, res) => {
     bonusUnits: ASM.bonusUnits(db()),
     reducedUnits: ASM.reducedDispatchUnits(db()),
     stock: ASM.stock(db()),
-    dispatchers: db().dispatchers.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
+    dispatchers: db().dispatchers.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active, incentiveCut: d.incentiveCut || 0 })),
     leaders: db().people.filter((p) => p.role === 'leader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: ASM.pendingOf(db(), p.id) })),
   });
 });
@@ -1662,7 +1685,7 @@ admin.post('/assembly/old', (req, res) => {
       installerId: str(req.body.installerId) || null, helperId: str(req.body.helperId) || null,
       createdAt: t.value.started, assignedAt: t.value.started, startedAt: t.value.started, completedAt: t.value.completed,
       createdBy: 'admin', entryBy: 'admin (old entry)', timesEditedBy: 'admin', note: str(req.body.note, 200),
-      incentive: ASM.incentiveFor(db(), model),
+      incentive: asmIncentive(model, leader ? leader.id : null),
       location: 'godown', godownAt: new Date().toISOString(),
     });
   }
@@ -1687,7 +1710,7 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
         installerId: r.installerId || null, helperId: r.helperId || null,
         createdAt: r.startedAt, assignedAt: r.startedAt, startedAt: r.startedAt, completedAt: r.completedAt,
         createdBy: leader.name, entryBy: `${leader.name} (old entry, approved by admin)`, timesEditedBy: leader.name, note: r.note,
-        incentive: ASM.incentiveFor(db(), r.model),
+        incentive: asmIncentive(r.model, leader.id),
       });
     }
     r.status = 'approved';
@@ -1889,7 +1912,7 @@ function sendFromGodown(body, who) {
       m.dispatchedAt = at;
       m.dispatchedBy = by;
       m.dispatchNote = str(body.note, 200);
-      m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, fromUnitId: m.unitId, amount: ASM.dispatchAmount(db(), m.model, m.unitId) } : null;
+      m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, fromUnitId: m.unitId, amount: dispatchCut(ASM.dispatchAmount(db(), m.model, m.unitId), who.dispatcherId) } : null;
     }
   } else return { error: 'Choose: to another unit or to a client' };
   store.save();
@@ -1944,7 +1967,7 @@ function refreshDispatchIncentives() {
   for (const m of db().assembly) {
     const d = m.dispatchIncentive;
     if (m.location !== 'dispatched' || !d || !d.dispatcherId || d.amount || (m.dispatchedAt || '') < since) continue;
-    const amount = ASM.dispatchAmount(db(), m.model, d.fromUnitId || m.unitId);
+    const amount = dispatchCut(ASM.dispatchAmount(db(), m.model, d.fromUnitId || m.unitId), d.dispatcherId);
     if (amount > 0) { d.amount = amount; d.rateAddedLater = true; n++; }
   }
   return n;
@@ -2018,7 +2041,7 @@ app.post('/api/godown/edit-model', (req, res) => {
   for (const m of list.slice(0, qty)) {
     (m.modelEdits = m.modelEdits || []).push({ from, to: model, by, at });
     m.model = model;
-    if (m.source !== 'stock') m.incentive = ASM.incentiveFor(db(), model); // assembly incentive follows the right model
+    if (m.source !== 'stock') m.incentive = asmIncentive(model, m.leaderId); // assembly incentive follows the right model
   }
   store.save();
   res.json({ ok: true, changed: qty });
@@ -2100,6 +2123,7 @@ admin.put('/dispatchers/:id', (req, res) => {
   if (!d) return res.status(404).json({ error: 'Not found' });
   if (req.body.name !== undefined) d.name = str(req.body.name, 80) || d.name;
   if (req.body.active !== undefined) d.active = !!req.body.active;
+  if (req.body.incentiveCut !== undefined) d.incentiveCut = Math.max(0, Math.min(100, Number(req.body.incentiveCut) || 0));
   if (req.body.password) { if (String(req.body.password).length < 4) return bad(res, 'Password must be at least 4 characters'); d.passHash = auth.hashPassword(String(req.body.password)); }
   store.save();
   res.json({ ok: true });

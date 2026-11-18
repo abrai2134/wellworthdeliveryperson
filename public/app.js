@@ -1212,6 +1212,7 @@ function personForm(p, unitId, role) {
       <div><label>Phone</label><input name="phone" type="tel" value="${esc(v.phone)}"></div>
       <div><label>Unit</label><select name="unitId"><option value="">— no unit / common —</option>${A().units.map((u) => `<option value="${esc(u.id)}" ${v.unitId === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div>
       <div><label>Work *</label><select name="role">${Object.entries(ROLE_NAMES).map(([k, l]) => `<option value="${k}" ${v.role === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div><label>Incentive reduction % <span class="small muted">(team leader share only)</span></label><input name="incentiveCut" type="number" min="0" max="100" value="${esc(v.incentiveCut || 0)}"></div>
       <div><label>Type</label><select name="payType"><option value="">— not set —</option><option value="contractor" ${v.payType === 'contractor' ? 'selected' : ''}>Contractor (production basis)</option><option value="payroll" ${v.payType === 'payroll' ? 'selected' : ''}>Payroll (incentive)</option></select></div>
     </div>
     <label class="check"><input type="checkbox" name="backup" ${v.backup ? 'checked' : ''}> 🆘 Emergency backup (only used when others are short or picked for an emergency)</label>
@@ -1226,7 +1227,7 @@ function personForm(p, unitId, role) {
     <div class="actions">${p ? '<button type="button" class="danger" id="del">Remove</button><div class="spacer"></div>' : ''}<button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
   async (fd) => {
     const body = {
-      name: fd.get('name'), phone: fd.get('phone'), unitId: fd.get('unitId'), role: fd.get('role'), payType: fd.get('payType'), backup: fd.get('backup') === 'on',
+      name: fd.get('name'), phone: fd.get('phone'), unitId: fd.get('unitId'), role: fd.get('role'), payType: fd.get('payType'), incentiveCut: fd.get('incentiveCut'), backup: fd.get('backup') === 'on',
       username: fd.get('username'), password: fd.get('password'), active: fd.get('active') === 'on', removeLogin: fd.get('removeLogin') === 'on',
     };
     await api(p ? `/admin/people/${p.id}` : '/admin/people', { method: p ? 'PUT' : 'POST', body });
@@ -1997,7 +1998,7 @@ async function adminAssembly(main) {
     const waitingHere = r.items.filter((m) => m.unitId === u.id && m.status === 'waiting').length;
     return `<div class="card unit-card"><div class="row"><div class="name">${esc(u.name)}</div><div class="spacer"></div><button class="small" data-add-leader="${esc(u.id)}">+ Add team leader</button></div>
       ${waitingHere ? `<div class="small"><span class="badge warn">${waitingHere} machine(s) waiting</span>${ls.length ? '' : ' – add a team leader so they can be given out'}</div>` : ''}
-      ${ls.length ? ls.map((p) => { const x = r.leaders.find((l) => l.id === p.id); return `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b>${p.active ? '' : ' <span class="badge">inactive</span>'} ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}</div>
+      ${ls.length ? ls.map((p) => { const x = r.leaders.find((l) => l.id === p.id); return `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b>${p.active ? '' : ' <span class="badge">inactive</span>'} ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}${p.incentiveCut ? ` <span class="badge bad">−${p.incentiveCut}% incentive</span>` : ''}</div>
         <div class="sub-line small"><span class="muted">${x ? x.pending : 0} pending</span>${telLink(p.phone)}<button class="link small" data-edit-leader="${esc(p.id)}">Edit</button><button class="link small danger" data-del-leader="${esc(p.id)}">Remove</button></div></div>`; }).join('') : '<div class="small muted" style="margin-top:6px">No team leader yet.</div>'}</div>`;
   }).join('');
   main.innerHTML = `<div class="row section"><h1 style="margin:0">🛠️ Assembly</h1><div class="spacer"></div>
@@ -2016,8 +2017,8 @@ async function adminAssembly(main) {
     <div id="adm-dsp-board"></div>
     <div class="card section"><div class="row"><h2 style="margin:0">🚚 Dispatch logins</h2><div class="spacer"></div><button class="small primary" id="dsp-add">+ Add dispatch login</button></div>
       <div class="small muted">They log in with the 🚚 Dispatch button, see every unit's godown stock and send machines to another unit or to a client.</div>
-      ${r.dispatchers.length ? r.dispatchers.map((d) => `<div class="drv"><div class="who-line"><b>${esc(d.name)}</b> <code>${esc(d.username)}</code>${d.active ? '' : ' <span class="badge">inactive</span>'}</div>
-        <div class="sub-line small"><button class="link small" data-dsp-pw="${esc(d.id)}">Change password</button><button class="link small" data-dsp-toggle="${esc(d.id)}">${d.active ? 'Make inactive' : 'Make active'}</button><button class="link small danger" data-dsp-del="${esc(d.id)}">Remove</button></div></div>`).join('') : '<div class="small muted" style="margin-top:6px">No dispatch login yet.</div>'}</div>
+      ${r.dispatchers.length ? r.dispatchers.map((d) => `<div class="drv"><div class="who-line"><b>${esc(d.name)}</b> <code>${esc(d.username)}</code>${d.active ? '' : ' <span class="badge">inactive</span>'}${d.incentiveCut ? ` <span class="badge bad">−${d.incentiveCut}% incentive</span>` : ''}</div>
+        <div class="sub-line small"><button class="link small" data-dsp-pw="${esc(d.id)}">Change password</button><button class="link small" data-dsp-cut="${esc(d.id)}|${d.incentiveCut || 0}">Reduction %</button><button class="link small" data-dsp-toggle="${esc(d.id)}">${d.active ? 'Make inactive' : 'Make active'}</button><button class="link small danger" data-dsp-del="${esc(d.id)}">Remove</button></div></div>`).join('') : '<div class="small muted" style="margin-top:6px">No dispatch login yet.</div>'}</div>
     <div class="row section" style="margin-top:16px"><h2 style="margin:0">Machines</h2><div class="spacer"></div>
       <select id="af-unit" style="width:auto">${opt('', 'All units', f.unit)}${A().units.map((u) => opt(u.id, esc(u.name), f.unit)).join('')}</select>
       <select id="af-status" style="width:auto">${opt('open', 'Not assembled yet', f.status)}${opt('waiting', 'Waiting for leader', f.status)}${opt('done', 'Assembled (30 days)', f.status)}${opt('all', 'All', f.status)}</select></div>
@@ -2066,6 +2067,13 @@ async function adminAssembly(main) {
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
     async (fd) => { await api('/admin/dispatchers', { method: 'POST', body: Object.fromEntries(fd) }); toast('Dispatch login added'); renderAdmin(); });
   const dsp = (id) => r.dispatchers.find((d) => d.id === id);
+  // dispatch incentive reduction % for this dispatch login (0 = none)
+  main.querySelectorAll('[data-dsp-cut]').forEach((b) => (b.onclick = async () => {
+    const [id, cur] = b.dataset.dspCut.split('|');
+    const v = prompt('Dispatch incentive reduction % for this login (0 = no reduction)', cur);
+    if (v === null) return;
+    try { await api('/admin/dispatchers/' + id, { method: 'PUT', body: { incentiveCut: v } }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); }
+  }));
   main.querySelectorAll('[data-dsp-pw]').forEach((b) => (b.onclick = async () => {
     const pw = prompt(`New password for ${dsp(b.dataset.dspPw).name}:`, '');
     if (!pw) return;
