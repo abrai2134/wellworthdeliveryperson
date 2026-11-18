@@ -141,7 +141,7 @@ app.get('/api/public/find', (req, res) => {
   const onlyUnit = str(req.query.unitId);
   if (q.length < 2 && !onlyUnit) return res.json({ models: [], units: unitList });
   // A full model no. (e.g. FT~30BK) shows only that model – not FT~30BKSB; otherwise partial matches.
-  const allModels = [...db().fab, ...db().painting, ...db().assembly].map((m) => m.model);
+  const allModels = [...db().bend, ...db().fab, ...db().painting, ...db().assembly].map((m) => m.model);
   const exact = q && allModels.some((md) => ASM.key(md) === q || ASM.baseKey(md) === q);
   const hit = (model) => (exact ? ASM.key(model) === q || ASM.baseKey(model) === q : String(model || '').toUpperCase().replace(/[^A-Z0-9]/g, '').includes(q));
   const inUnit = (unitId) => !onlyUnit || unitId === onlyUnit;
@@ -149,8 +149,9 @@ app.get('/api/public/find', (req, res) => {
   const out = {};
   const row = (model, unitId) => {
     const m = (out[model] ||= { model, units: {} });
-    return (m.units[unitId || ''] ||= { unit: units[unitId] || '(no unit)', fabNotStarted: 0, inFab: 0, paintComing: 0, inPainting: 0, arrived: 0, notStarted: 0, assembling: 0, godown: 0, booked: 0 });
+    return (m.units[unitId || ''] ||= { unit: units[unitId] || '(no unit)', bending: 0, fabNotStarted: 0, inFab: 0, paintComing: 0, inPainting: 0, arrived: 0, notStarted: 0, assembling: 0, godown: 0, booked: 0 });
   };
+  for (const m of db().bend) if (hit(m.model) && inUnit(m.unitId) && FAB.OPEN.includes(m.status)) row(m.model, m.unitId).bending++;
   for (const m of db().fab) if (hit(m.model) && inUnit(m.unitId) && FAB.OPEN.includes(m.status)) row(m.model, m.unitId)[m.status === 'started' ? 'inFab' : 'fabNotStarted']++;
   for (const x of db().painting) if (hit(x.model) && inUnit(x.unitId) && ['coming', 'in'].includes(x.status)) row(x.model, x.unitId)[x.status === 'coming' ? 'paintComing' : 'inPainting']++;
   for (const m of db().assembly) {
@@ -2238,6 +2239,144 @@ function fabSummary() {
   return open.map(fabView);
 }
 const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.active && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
+
+// ---------- 🔩 Bending (before fab) ----------
+// Same as fab: machines per unit, shared fairly between the unit's bending leaders (no helper).
+// Bending done → the machine goes into Fab for the same unit.
+const bendAssign = () => FAB.assignWaiting(db(), db().settings.timezone, 'bend');
+function bendAdd(body, by, creator) {
+  const unit = liveUnit(str(body.unitId));
+  if (!unit) return { error: 'Choose the unit – bending is shared only between that unit\'s bending leaders' };
+  const model = canonModel(body.model);
+  if (!model) return { error: 'Enter the model no.' };
+  const qty = parseInt(body.qty, 10);
+  if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
+  const now = new Date().toISOString();
+  for (let i = 0; i < qty; i++) db().bend.push({ id: newId('bnd'), unitId: unit.id, model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) });
+  bendAssign();
+  store.save();
+  return { value: { id: '' } };
+}
+function bendDone(m, body, by) {
+  if (!FAB.PENDING.includes(m.status)) return { error: 'This machine is not in bending' };
+  const t = asmTimes(m, body, true);
+  if (t.error) return t;
+  m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
+  // into Fab for the same unit (shared between its fab leaders as usual)
+  const f = { id: newId('fab'), unitId: m.unitId, model: m.model, status: 'waiting', source: 'bend', bendId: m.id, createdAt: m.completedAt, createdBy: `${by} (bending done)`, creator: { role: 'bend', id: m.leaderId } };
+  db().fab.push(f);
+  m.fabId = f.id;
+  bendAssign();
+  fabAssign();
+  store.save();
+  return { value: m };
+}
+const bendFind = (req, res, ok) => {
+  const m = db().bend.find((x) => x.id === req.params.id && (!ok || ok(x)));
+  if (!m) res.status(404).json({ error: 'Machine not found' });
+  return m;
+};
+const bendPeople = (unitId, role) => db().people.filter((p) => p.role === role && p.active && !p.deleted && (!unitId || p.unitId === unitId)).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id, 'bend'), canLogin: !!p.passHash }));
+function bendSetLeader(m, body, by) {
+  if (!FAB.OPEN.includes(m.status)) return { error: 'Only machines not finished can be changed' };
+  const leaderId = str(body.leaderId);
+  if (leaderId && !db().people.some((p) => p.id === leaderId && p.role === 'bendleader' && !p.deleted && p.active && (!m.unitId || p.unitId === m.unitId))) return { error: 'Choose a bending leader of this unit' };
+  (m.edits = m.edits || []).push({ at: new Date().toISOString(), by, from: { leaderId: m.leaderId }, to: { leaderId } });
+  m.leaderId = leaderId || null;
+  if (m.leaderId && m.status === 'waiting') { m.status = 'assigned'; m.assignedAt = new Date().toISOString(); }
+  if (!m.leaderId) { m.status = 'waiting'; m.assignedAt = null; m.startedAt = null; }
+  m.manual = true;
+  store.save();
+  return { value: m };
+}
+function bendMove(body, by, unitId) {
+  const from = str(body.fromLeaderId);
+  const to = str(body.toLeaderId);
+  const model = str(body.model, 120);
+  const toP = db().people.find((p) => p.id === to && p.role === 'bendleader' && p.active && !p.deleted);
+  if (!toP || to === from) return { error: 'Choose the bending leader to move them to' };
+  const list = db().bend.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+  if (!list.length) return { error: 'No machine of this model is waiting to start with that bending leader' };
+  if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a bending leader of the same unit' };
+  const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
+  const at = new Date().toISOString();
+  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId }, to: { leaderId: to } }); m.leaderId = to; m.assignedAt = at; m.manual = true; }
+  store.save();
+  return { value: { id: '', moved: qty } };
+}
+function bendStart(m, by) {
+  if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No bending leader yet' : 'Already started or finished' };
+  m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by;
+  store.save();
+  return { value: m };
+}
+const bendView = (m) => ({ ...fabView(m), helper: null });
+const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
+app.get('/api/staff/bend', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (!isBend(p)) return bad(res, 'Only for the bending section');
+  const month = monthOf(req.query.month);
+  const manager = p.role === 'bendmanager';
+  const mine = (m) => (manager ? m.unitId === p.unitId : m.leaderId === p.id);
+  res.json({
+    isLeader: p.role === 'bendleader', isManager: manager, unitId: p.unitId,
+    units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
+    items: db().bend.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(bendView),
+    unitLeaders: bendPeople(p.unitId, 'bendleader'),
+    maxPending: FAB.settings(db(), 'bend').maxPending,
+    month,
+    done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
+  });
+});
+app.post('/api/staff/bend', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (!isBend(p)) return bad(res, 'Only bending leaders / bending admins can enter machines');
+  send(res, bendAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
+});
+app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, bendStart(m, req.user.account.name)); });
+app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
+app.post('/api/staff/bend/:id/assign', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'bendmanager') return bad(res, 'Only the bending admin can give machines to bending leaders');
+  const m = bendFind(req, res, (x) => x.unitId === p.unitId);
+  if (m) send(res, bendSetLeader(m, req.body, p.name + ' (bending admin)'));
+});
+app.post('/api/staff/bend/move', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'bendmanager') return bad(res, 'Only the bending admin can move machines');
+  const r = bendMove(req.body, p.name + ' (bending admin)', p.unitId);
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r.value });
+});
+admin.get('/bend', (req, res) => {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  res.json({
+    items: db().bend.filter((m) => FAB.OPEN.includes(m.status)).map(bendView),
+    done: db().bend.filter((m) => m.status === 'done' && (m.completedAt || '') >= since).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
+    leaders: bendPeople(null, 'bendleader'),
+    settings: FAB.settings(db(), 'bend'),
+  });
+});
+admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
+admin.post('/bend/move', (req, res) => { const r = bendMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
+admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin')); });
+admin.post('/bend/:id/done', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendDone(m, req.body, 'admin')); });
+admin.post('/bend/:id/assign', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendSetLeader(m, req.body, 'admin')); });
+admin.post('/bend/:id/cancel', (req, res) => {
+  const m = bendFind(req, res);
+  if (!m) return;
+  if (!FAB.OPEN.includes(m.status)) return bad(res, 'Only machines not finished can be cancelled');
+  m.status = 'cancelled'; m.cancelledAt = new Date().toISOString(); m.cancelReason = str(req.body.reason, 150);
+  bendAssign();
+  store.save();
+  res.json({ ok: true });
+});
+admin.put('/bend/settings', (req, res) => {
+  db().settings.bend = { ...FAB.settings(db(), 'bend'), maxPending: Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) };
+  bendAssign();
+  store.save();
+  res.json({ ok: true });
+});
 
 // Painting: what is coming from fab, what is in painting, and the last 30 days of in / out.
 function paintingView() {

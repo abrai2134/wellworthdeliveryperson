@@ -39,3 +39,17 @@ test('fab machines go only to fab leaders and helpers of their own unit', () => 
   FAB.assignWaiting(db, 'Asia/Kolkata');
   assert.ok(db.fab.every((m) => m.leaderId === 'B' && m.helperId === 'HB'));
 });
+
+test('bending machines go only to bending leaders of their unit (no helper)', () => {
+  const db = defaults();
+  db.units.push({ id: 'u1', name: '814', active: true }, { id: 'u2', name: '816', active: true });
+  db.people.push(
+    { id: 'B1', name: 'Bend 814', role: 'bendleader', unitId: 'u1', active: true },
+    { id: 'B2', name: 'Bend 816', role: 'bendleader', unitId: 'u2', active: true },
+    { id: 'H1', name: 'Fab help', role: 'fabhelper', unitId: 'u2', active: true },
+  );
+  for (let i = 0; i < 3; i++) db.bend.push({ id: 'b' + i, unitId: 'u2', model: 'X', status: 'waiting', createdAt: String(i) });
+  FAB.assignWaiting(db, 'Asia/Kolkata', 'bend');
+  assert.ok(db.bend.every((m) => m.leaderId === 'B2' && !m.helperId));
+  assert.equal(FAB.pendingOf(db, 'B2', 'bend'), 3);
+});
