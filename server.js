@@ -2244,6 +2244,24 @@ const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.a
 // Same as fab: machines per unit, shared fairly between the unit's bending leaders (no helper).
 // Bending done → the machine goes into Fab for the same unit.
 const bendAssign = () => FAB.assignWaiting(db(), db().settings.timezone, 'bend');
+const bendRates = () => (FAB.settings(db(), 'bend').contractorRates || []);
+const bendRateOf = (model) => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.rate) || 0) : null; };
+// done before the rate existed: fill in (last 2 months; not for company bending)
+function refreshBendAmounts() {
+  const since = new Date(Date.now() - 62 * 86400000).toISOString();
+  for (const m of db().bend) {
+    if (m.status !== 'done' || m.byCompany || !m.leaderId || m.bendAmount || (m.completedAt || '') < since) continue;
+    const r = bendRateOf(m.model);
+    if (r > 0) { m.bendRate = r; m.bendAmount = r; }
+  }
+}
+function bendBoard(month) {
+  const done = db().bend.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
+  return db().people.filter((p) => p.role === 'bendleader' && !p.deleted).map((p) => {
+    const mine = done.filter((m) => m.leaderId === p.id);
+    return { id: p.id, name: p.name, unitName: unitName(p.unitId), done: mine.length, byCompany: mine.filter((m) => m.byCompany).length, amount: mine.reduce((t, m) => t + (m.bendAmount || 0), 0) };
+  }).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
+}
 function bendAdd(body, by, creator) {
   const unit = liveUnit(str(body.unitId));
   if (!unit) return { error: 'Choose the unit – bending is shared only between that unit\'s bending leaders' };
@@ -2262,6 +2280,9 @@ function bendDone(m, body, by) {
   const t = asmTimes(m, body, true);
   if (t.error) return t;
   m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
+  // bending leader earns the model's bending rate – not when the company did the bending
+  m.bendRate = bendRateOf(m.model) || 0;
+  m.bendAmount = m.byCompany || !m.leaderId ? 0 : m.bendRate;
   // into Fab for the same unit (shared between its fab leaders as usual)
   const f = { id: newId('fab'), unitId: m.unitId, model: m.model, status: 'waiting', source: 'bend', bendId: m.id, createdAt: m.completedAt, createdBy: `${by} (bending done)`, creator: { role: 'bend', id: m.leaderId } };
   // same person in fab: the fab leader of this unit with the same name as the bending leader
@@ -2309,13 +2330,14 @@ function bendMove(body, by, unitId) {
   store.save();
   return { value: { id: '', moved: qty } };
 }
-function bendStart(m, by) {
+// company: the bending is done by the company / payroll people – no bending rate for the leader.
+function bendStart(m, by, company) {
   if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No bending leader yet' : 'Already started or finished' };
-  m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by;
+  m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by; m.byCompany = !!company;
   store.save();
   return { value: m };
 }
-const bendView = (m) => ({ ...fabView(m), helper: null });
+const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, bendAmount: m.bendAmount || 0 });
 const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
 app.get('/api/staff/bend', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2331,6 +2353,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
+    myAmount: p.role === 'bendleader' ? db().bend.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.bendAmount || 0), 0) : null,
   });
 });
 app.post('/api/staff/bend', need('staff'), (req, res) => {
@@ -2340,7 +2363,7 @@ app.post('/api/staff/bend', need('staff'), (req, res) => {
 });
 // the bending leader for own machines; the bending admin for any machine of the unit
 const bendMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'bendmanager' && x.unitId === req.user.account.unitId);
-app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name)); });
+app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name, req.body.company)); });
 app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
 app.post('/api/staff/bend/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2362,11 +2385,13 @@ admin.get('/bend', (req, res) => {
     done: db().bend.filter((m) => m.status === 'done' && (m.completedAt || '') >= since).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
     leaders: bendPeople(null, 'bendleader'),
     settings: FAB.settings(db(), 'bend'),
+    month: monthOf(req.query.month),
+    board: bendBoard(monthOf(req.query.month)),
   });
 });
 admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
 admin.post('/bend/move', (req, res) => { const r = bendMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
-admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin')); });
+admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company)); });
 admin.post('/bend/:id/done', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendDone(m, req.body, 'admin')); });
 admin.post('/bend/:id/assign', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendSetLeader(m, req.body, 'admin')); });
 admin.post('/bend/:id/cancel', (req, res) => {
@@ -2379,7 +2404,14 @@ admin.post('/bend/:id/cancel', (req, res) => {
   res.json({ ok: true });
 });
 admin.put('/bend/settings', (req, res) => {
-  db().settings.bend = { ...FAB.settings(db(), 'bend'), maxPending: Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) };
+  { const dup = Array.isArray(req.body.contractorRates) && duplicateIn(req.body.contractorRates, 'bending rate'); if (dup) return bad(res, dup); }
+  const cur = FAB.settings(db(), 'bend');
+  db().settings.bend = {
+    ...cur,
+    maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
+    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
+  };
+  refreshBendAmounts();
   bendAssign();
   store.save();
   res.json({ ok: true });

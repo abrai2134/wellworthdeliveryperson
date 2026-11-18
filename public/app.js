@@ -2484,6 +2484,7 @@ function fabRow(m, who, kind = 'fab') {
   const btns = [];
   const canWork = who === 'admin' || who === 'manager' || (who === 'fableader' && m.leader && m.leader.id === state.me.id);
   if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-fab-start="${esc(m.id)}">▶ Start</button>`);
+  if (canWork && m.status === 'assigned' && kind === 'bend') btns.push(`<button class="small" data-fab-startco="${esc(m.id)}" title="Bending done by the company – no bending rate for the leader">🏢 Start by company</button>`);
   if (canWork && (m.status === 'assigned' || m.status === 'started')) btns.push(`<button class="small primary" data-fab-done="${esc(m.id)}">✓ ${L.done}</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-fab-assign="${esc(m.id)}">Change people</button><button class="small danger" data-fab-cancel="${esc(m.id)}">Cancel</button>`);
   if ((who === 'unit' || who === 'manager') && m.status !== 'done') btns.push(`<button class="small${m.leader ? '' : ' primary'}" data-fab-assign="${esc(m.id)}">${m.leader ? 'Change ' + L.leader : 'Give to ' + L.leader}</button>`);
@@ -2503,7 +2504,7 @@ function fabGrouped(items, who, kind = 'fab') {
     const g = groups[n];
     const inFab = g.filter((m) => m.status === 'started').length;
     const clusters = {};
-    for (const m of g) (clusters[[m.status, m.model].join('|')] ||= []).push(m);
+    for (const m of g) (clusters[[m.status, m.model, m.byCompany ? 'co' : ''].join('|')] ||= []).push(m);
     const order = { started: 0, assigned: 1, waiting: 2, done: 3 };
     return `<div class="done-list asm-group"><div class="dl-head row"><span><b>${L.icon} ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${inFab ? ` · ${inFab} ${L.inWork.toLowerCase()}` : ''}</span></span></div>
       ${Object.values(clusters).sort((a, b) => order[a[0].status] - order[b[0].status] || a[0].model.localeCompare(b[0].model)).map((c) => fabCluster(c, who, kind)).join('')}</div>`;
@@ -2518,11 +2519,12 @@ function fabCluster(c, who, kind = 'fab') {
   const ids = c.map((x) => x.id).join(',');
   const btns = [];
   if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-fab-start-many="${esc(ids)}">▶ Start${c.length > 1 ? ' ' + c.length : ''}</button>`);
+  if (canWork && m.status === 'assigned' && kind === 'bend') btns.push(`<button class="small" data-fab-startco-many="${esc(ids)}" title="Bending done by the company – no bending rate for the leader">🏢 Start by company${c.length > 1 ? ' ' + c.length : ''}</button>`);
   if (canWork && (m.status === 'assigned' || m.status === 'started')) btns.push(`<button class="small primary" data-fab-done-many="${esc(ids)}" data-model="${esc(m.model)}">✓ ${L.done}${c.length > 1 ? '…' : ''}</button>`);
   const when = m.status === 'done' ? fmtTime(m.completedAt) : m.status === 'started' ? 'started ' + ageText(m.startedAt) : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : 'given ' + ageText(m.assignedAt);
   return `<details class="done-row asm-row asm-cluster"><summary>
       <span class="badge ${cls} asm-dot">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔨' : m.status === 'waiting' ? '⏳' : '•'}</span>
-      <span class="dr-main"><b>${esc(m.model)}${c.length > 1 ? ` <span class="qty-tag">× ${c.length}</span>` : ''}</b><span class="small muted">${L.helper ? (helpers ? '🧰 ' + esc(helpers) : 'no fab helper') : ''}</span></span>
+      <span class="dr-main"><b>${esc(m.model)}${c.length > 1 ? ` <span class="qty-tag">× ${c.length}</span>` : ''}${m.byCompany ? ' <span class="badge w4">🏢 by company</span>' : ''}</b><span class="small muted">${L.helper ? (helpers ? '🧰 ' + esc(helpers) : 'no fab helper') : ''}</span></span>
       <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>${esc(when)}</span>
       ${btns.length ? `<span class="row fab-btns" style="gap:4px;flex-wrap:nowrap">${btns.join('')}</span>` : ''}
     </summary><div class="dr-body">${c.map((x) => fabRow(x, who, kind)).join('')}</div></details>`;
@@ -2561,6 +2563,16 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
   const find = (id) => items.find((m) => m.id === id);
   // several at once (one line "× N")
   const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  root.querySelectorAll('[data-fab-startco-many]').forEach((b) => (b.onclick = async (e) => {
+    stop(e);
+    const ids = b.dataset.fabStartcoMany.split(',');
+    if (!confirm(`Start ${ids.length} by the company? The bending leader gets no bending rate for ${ids.length === 1 ? 'it' : 'them'}.`)) return;
+    try { for (const id of ids) await api(`${base}/${id}/start`, { method: 'POST', body: { company: true } }); toast(`${ids.length} started by company`); reload(); } catch (ex) { toast(ex.message, true); }
+  }));
+  root.querySelectorAll('[data-fab-startco]').forEach((b) => (b.onclick = async () => {
+    if (!confirm('Start by the company? The bending leader gets no bending rate for this machine.')) return;
+    try { await api(`${base}/${b.dataset.fabStartco}/start`, { method: 'POST', body: { company: true } }); toast('Started by company'); reload(); } catch (ex) { toast(ex.message, true); }
+  }));
   root.querySelectorAll('[data-fab-start-many]').forEach((b) => (b.onclick = async (e) => {
     stop(e);
     const ids = b.dataset.fabStartMany.split(',');
@@ -2795,7 +2807,7 @@ async function renderBendStaff() {
     <div class="row section"><h2 style="margin:0">${r.isManager ? '🔩 Unit bending machines' : '🔩 My bending work'}</h2><div class="spacer"></div>${r.isLeader ? `<span class="badge w4">${r.items.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> ` : ''}<button class="primary small" id="bend-add">+ Machines for bending</button></div>
     ${fabSummaryHtml(r.items, r.isManager ? '/staff/bend/move' : null, 'bend')}
     ${r.items.length ? fabGrouped(r.items, who, 'bend') : '<div class="card muted">No bending machine right now.</div>'}
-    <div class="card section"><div class="row"><h3 style="margin:0">✓ ${r.isManager ? 'Bending done' : 'My bending done'} – ${esc(r.month)}</h3><div class="spacer"></div><input type="month" id="bend-month" value="${esc(r.month)}" style="width:auto"></div>
+    <div class="card section"><div class="row"><h3 style="margin:0">✓ ${r.isManager ? 'Bending done' : 'My bending done'} – ${esc(r.month)}${r.myAmount !== null && r.myAmount !== undefined ? ` · <span class="badge ok">₹${r.myAmount}</span>` : ''}</h3><div class="spacer"></div><input type="month" id="bend-month" value="${esc(r.month)}" style="width:auto"></div>
       ${r.done.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Done</th><th>Model no.</th><th>Bending leader</th></tr></thead><tbody>${r.done.map((m, i) => `<tr><td>${i + 1}</td><td class="small">${esc(fmtTime(m.completedAt))}</td><td>${esc(m.model)}</td><td>${esc(m.leader ? m.leader.name : '')}</td></tr>`).join('')}<tr><td></td><td colspan="3"><b>Total – ${r.done.length}</b></td></tr></tbody></table></div>` : '<p class="muted small">Nothing done in this month.</p>'}</div>`;
   bindFab(wrap, '/staff/bend', r.items, renderStaff, { leaders: r.unitLeaders }, 'bend');
   document.getElementById('bend-add').onclick = fabAddForm('/staff/bend', renderStaff, r.units, r.unitId, 'bend');
@@ -2804,7 +2816,7 @@ async function renderBendStaff() {
 
 // Admin: 🔩 Bending section (top of the Bending, Fab & Painting tab)
 async function adminBendHtml() {
-  const r = await api('/admin/bend');
+  const r = await api('/admin/bend' + (state.bendBoardMonth ? '?month=' + state.bendBoardMonth : ''));
   state.bendAdmin = r;
   const people = (role) => A().people.filter((p) => p.role === role);
   const person = (p) => `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b> <span class="small muted">${esc(p.unitName || '')}</span> ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}</div><div class="sub-line small">${p.role === 'bendleader' ? `<span class="muted">${(r.leaders.find((l) => l.id === p.id) || { pending: 0 }).pending} pending</span>` : ''}<button class="link small" data-edit-fp="${esc(p.id)}">Edit</button></div></div>`;
@@ -2814,6 +2826,11 @@ async function adminBendHtml() {
       <div class="card"><div class="row"><h3 style="margin:0">🔩 Bending leaders</h3><div class="spacer"></div><button class="small" id="bend-add-leader">+ Add</button></div>${people('bendleader').map(person).join('') || '<div class="small muted">None yet – add one (give a PIN so they can log in).</div>'}</div>
       <div class="card"><h3 style="margin-top:0">⚙️ Bending settings</h3><form id="bend-set"><label>Max pending per bending leader</label><input name="maxPending" type="number" min="1" max="100" value="${esc(r.settings.maxPending)}"><div style="margin-top:8px"><button class="primary small">Save</button></div></form></div>
     </div>
+    <div class="card section"><div class="row"><h2 style="margin:0">🏆 Bending scoreboard</h2><div class="spacer"></div><input type="month" id="bend-board-month" value="${esc(r.month)}" style="width:auto"></div>
+      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Bending leader</th><th class="num">Bending done</th><th class="num">By company</th><th class="num">Bending amount</th></tr></thead><tbody>
+      ${r.board.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b><div class="small muted">${esc(x.unitName)}</div></td><td class="num"><b>${x.done}</b></td><td class="num">${x.byCompany || '—'}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No bending leader yet.</td></tr>'}
+      </tbody></table></div><div class="small muted" style="margin-top:4px">The leader earns the model's bending rate for each machine started with ▶ Start and marked Bending done; machines started with 🏢 Start by company earn nothing.</div></div>
+    <form class="card section" id="bend-rates">${fabRatesFormHtml(await loadMachineList()).replace('💰 Fab contractor rate per model', '💰 Bending rate per model').replace('Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.', 'Paid to the bending leader for each machine finished in bending (not when started by the company).')}</form>
     <div id="bend-list">${fabSummaryHtml(r.items, '/admin/bend/move', 'bend')}${fabGrouped(r.items, 'admin', 'bend')}
     ${r.done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Bending done – last 30 days (${r.done.length})</b></summary><div class="done-list" style="margin-top:8px">${r.done.map((m) => fabRow(m, 'admin', 'bend')).join('')}</div></details>` : ''}</div>
     <hr style="margin:24px 0">`;
@@ -2825,6 +2842,8 @@ function bindAdminBend(main) {
   document.getElementById('bend-add-a').onclick = fabAddForm('/admin/bend', renderAdmin, A().units.filter((u) => u.active), null, 'bend');
   document.getElementById('bend-add-leader').onclick = () => personForm(null, null, 'bendleader');
   document.getElementById('bend-add-mgr').onclick = () => personForm(null, null, 'bendmanager');
+  bindFabRates(document.getElementById('bend-rates'), r.settings.contractorRates || [], '/admin/bend/settings', 'PUT', renderAdmin);
+  document.getElementById('bend-board-month').onchange = (e) => { state.bendBoardMonth = e.target.value; renderAdmin(); };
   document.getElementById('bend-set').onsubmit = async (e) => { e.preventDefault(); try { await api('/admin/bend/settings', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } };
 }
 
