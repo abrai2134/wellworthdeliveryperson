@@ -182,6 +182,14 @@ app.post('/api/login', (req, res) => {
     rec.count++;
     return res.status(401).json({ error: 'Wrong username or password' });
   }
+  // a person logs in only with the button of their own section (Fab / Bending / Helper – Team leader)
+  if (role === 'staff') {
+    const SECTIONS = { fab: ['fableader', 'fabhelper', 'fabmanager'], bend: ['bendleader', 'bendmanager', 'bendcompany'] };
+    const own = Object.keys(SECTIONS).find((k) => SECTIONS[k].includes(account.role)) || 'staff';
+    const asked = ['fab', 'bend'].includes(str(req.body.section)) ? str(req.body.section) : 'staff';
+    const NAMES = { fab: '🏭 Fab', bend: '🔩 Bending', staff: '🧰 Helper / Team leader' };
+    if (own !== asked) return res.status(401).json({ error: `This is not a ${NAMES[asked]} login – press the ${NAMES[own]} button to log in` });
+  }
   rec.count = 0;
   const token = auth.signToken({ role, id: account.id, exp: Date.now() + SESSION_DAYS * 86400000 }, db().secret);
   const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';

@@ -201,7 +201,7 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
     if (old) old.remove();
     try {
       // fab team leaders / helpers are people (staff) with a fab role
-      await api('/login', { method: 'POST', body: { role: role === 'fab' || role === 'bend' ? 'staff' : role, username: fd.get('username'), password: fd.get('password') } });
+      await api('/login', { method: 'POST', body: { role: role === 'fab' || role === 'bend' ? 'staff' : role, section: role, username: fd.get('username'), password: fd.get('password') } });
       state.me = await api('/me');
       state.tab = 'today';
       render();
