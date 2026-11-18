@@ -2679,11 +2679,11 @@ async function renderPainting() {
 async function renderFabStaff() {
   const r = await api('/staff/fab' + (state.fabMonth ? '?month=' + state.fabMonth : ''));
   state.fabLeaders = r.unitLeaders;
-  const who = r.isManager ? 'unit' : r.isLeader ? 'fableader' : 'fabhelper'; // the manager gets the unit's "Change fab leader" buttons
+  const who = r.isManager ? 'manager' : r.isLeader ? 'fableader' : 'fabhelper'; // the manager: Change fab leader, ▶ Start and ✓ Fab done
   const wrap = $app.querySelector('.wrap');
   const mine = r.items.filter((m) => (m.leader && m.leader.id === state.me.id) || (m.helper && m.helper.id === state.me.id));
   wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(state.today || new Date().toISOString().slice(0, 10)))}</div><div class="big">🏭 Fab – ${r.isManager ? 'manager' : r.isLeader ? 'team leader' : 'helper'}</div>
-      <div class="line">${r.isManager ? `Give each machine to a fab leader (Change fab leader). Fab leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : r.isLeader ? 'Tap ▶ Start when you begin a machine and ✓ Fab done when it is finished – it then goes to Painting.' : 'Your fab machines.'}</div></div>
+      <div class="line">${r.isManager ? `Give each machine to a fab leader (Change fab leader); you can also ▶ Start and ✓ Fab done. Fab leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : r.isLeader ? 'Tap ▶ Start when you begin a machine and ✓ Fab done when it is finished – it then goes to Painting.' : 'Your fab machines.'}</div></div>
     <div class="row section"><h2 style="margin:0">${r.isManager ? '🏭 Unit fab machines' : '🏭 My fab work'}</h2><div class="spacer"></div>${r.isManager ? '<button class="small" id="fab-rates-btn">💰 Fab rates</button> <button class="primary small" id="fab-add">+ Machines for fab</button>' : ''}${r.isLeader ? `<span class="badge w4">${mine.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> <button class="primary small" id="fab-add">+ Machines for fab</button>` : ''}</div>
     ${fabSummaryHtml(r.items, r.isManager ? '/staff/fab/move' : null)}
     ${r.items.length ? fabGrouped(r.items, who) : '<div class="card muted">No fab machine for you right now.</div>'}

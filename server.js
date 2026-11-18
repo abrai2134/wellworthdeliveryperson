@@ -2711,8 +2711,10 @@ app.post('/api/staff/fab/:id/assign', need('staff'), (req, res) => {
   const m = fabFind(req, res, (x) => x.unitId === p.unitId);
   if (m) send(res, fabSetPeople(m, req.body, p.name + ' (fab manager)'));
 });
-app.post('/api/staff/fab/:id/start', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabStart(m, req.user.account.name)); });
-app.post('/api/staff/fab/:id/done', need('staff'), (req, res) => { const m = fabFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, fabDone(m, req.body, req.user.account.name)); });
+// the fab leader for own machines; the fab manager for any machine of the unit
+const fabMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'fabmanager' && (!req.user.account.unitId || x.unitId === req.user.account.unitId));
+app.post('/api/staff/fab/:id/start', need('staff'), (req, res) => { const m = fabFind(req, res, fabMayWork(req)); if (m) send(res, fabStart(m, req.user.account.name)); });
+app.post('/api/staff/fab/:id/done', need('staff'), (req, res) => { const m = fabFind(req, res, fabMayWork(req)); if (m) send(res, fabDone(m, req.body, req.user.account.name)); });
 
 // Fab (admin)
 admin.get('/fab', (req, res) => {
