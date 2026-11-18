@@ -2247,13 +2247,17 @@ const bendAssign = () => FAB.assignWaiting(db(), db().settings.timezone, 'bend')
 const bendRates = () => (FAB.settings(db(), 'bend').contractorRates || []);
 const bendRateOf = (model) => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.rate) || 0) : null; };
 // incentive for the company (payroll) employee who did the bending
-const bendPayrollOf = (model) => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.payroll) || 0) : 0; };
+const bendPayrollOf = (model, key = 'payroll') => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r[key]) || 0) : 0; };
 // done before the rate existed: fill in (last 2 months; not for company bending)
 function refreshBendAmounts() {
   const since = new Date(Date.now() - 62 * 86400000).toISOString();
   for (const m of db().bend) {
     if (m.status !== 'done' || (m.completedAt || '') < since) continue;
-    if (m.byCompany) { if (!m.companyAmount) m.companyAmount = bendPayrollOf(m.model); continue; }
+    if (m.byCompany) {
+      if (!m.companyAmount) m.companyAmount = bendPayrollOf(m.model);
+      if (m.companyLeader && !m.companyLeaderAmount) m.companyLeaderAmount = bendPayrollOf(m.model, 'payrollLeader');
+      continue;
+    }
     if (!m.leaderId || m.bendAmount) continue;
     const r = bendRateOf(m.model);
     if (r > 0) { m.bendRate = r; m.bendAmount = r; }
@@ -2281,7 +2285,10 @@ function migrateCompanyWorkers() {
 const companyPeople = (unitId) => db().people.filter((p) => p.role === 'bendcompany' && !p.deleted && (!unitId || !p.unitId || p.unitId === unitId));
 const findCompanyPerson = (name) => db().people.find((p) => p.role === 'bendcompany' && !p.deleted && p.name.trim().toUpperCase() === String(name || '').trim().toUpperCase());
 // is this machine bent by that company employee (by id, or by name for older entries)
-const coMine = (m, p) => m.byCompany && (m.companyWorkerId ? m.companyWorkerId === p.id : (m.companyWorker || '').trim().toUpperCase() === p.name.trim().toUpperCase());
+const sameCo = (id, name, p) => (id ? id === p.id : (name || '').trim().toUpperCase() === p.name.trim().toUpperCase());
+// 'leader' / 'person' when this company employee was the company team leader / person of the machine
+const coRole = (m, p) => (!m.byCompany ? null : m.companyLeader && sameCo(m.companyLeaderId, m.companyLeader, p) ? 'leader' : sameCo(m.companyWorkerId, m.companyWorker, p) ? 'person' : null);
+const coMine = (m, p) => !!coRole(m, p);
 // names offered in the Start by company box
 const bendWorkers = (unitId) => [...new Set(companyPeople(unitId).filter((p) => p.active).map((p) => p.name))].sort();
 const coPersonView = (p) => ({ id: p.id, name: p.name, phone: p.phone || '', username: p.username || '', unitId: p.unitId || '', unitName: unitName(p.unitId), active: !!p.active, canLogin: !!p.passHash });
@@ -2290,9 +2297,14 @@ function bendCompanyBoard(month) {
   const g = {};
   for (const m of db().bend) {
     if (m.status !== 'done' || !m.byCompany || (m.completedAt || '').slice(0, 7) !== month) continue;
-    const k = m.companyWorkerId || (m.companyWorker || '?').trim().toUpperCase();
-    const x = (g[k] ||= { name: m.companyWorker || '(name not entered)', unitName: unitName(m.unitId), done: 0, amount: 0 });
-    x.done++; x.amount += m.companyAmount || 0;
+    const add = (id, name, role, amt) => {
+      const k = id || (name || '?').trim().toUpperCase();
+      const x = (g[k] ||= { name: name || '(name not entered)', unitName: unitName(m.unitId), asLeader: 0, asPerson: 0, leaderAmount: 0, personAmount: 0, amount: 0 });
+      if (role === 'leader') { x.asLeader++; x.leaderAmount += amt; } else { x.asPerson++; x.personAmount += amt; }
+      x.amount += amt;
+    };
+    if (m.companyLeader) add(m.companyLeaderId, m.companyLeader, 'leader', m.companyLeaderAmount || 0);
+    add(m.companyWorkerId, m.companyWorker, 'person', m.companyAmount || 0);
   }
   return Object.values(g).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
 }
@@ -2317,7 +2329,10 @@ function bendDone(m, body, by) {
   // bending leader earns the model's bending rate – not when the company did the bending
   m.bendRate = bendRateOf(m.model) || 0;
   m.bendAmount = m.byCompany || !m.leaderId ? 0 : m.bendRate;
-  if (m.byCompany) m.companyAmount = bendPayrollOf(m.model); // incentive to the company employee
+  if (m.byCompany) { // incentive to the company person and the company team leader
+    m.companyAmount = bendPayrollOf(m.model);
+    if (m.companyLeader) m.companyLeaderAmount = bendPayrollOf(m.model, 'payrollLeader');
+  }
   // into Fab for the same unit (shared between its fab leaders as usual)
   const f = { id: newId('fab'), unitId: m.unitId, model: m.model, status: 'waiting', source: 'bend', bendId: m.id, createdAt: m.completedAt, createdBy: `${by} (bending done)`, creator: { role: 'bend', id: m.leaderId } };
   // same person in fab: the fab leader of this unit with the same name as the bending leader
@@ -2366,16 +2381,22 @@ function bendMove(body, by, unitId) {
   return { value: { id: '', moved: qty } };
 }
 // company: the bending is done by the company / payroll people – no bending rate for the leader.
-function bendStart(m, by, company, worker) {
+function bendStart(m, by, company, worker, leader) {
   if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No bending leader yet' : 'Already started or finished' };
   const name = str(worker, 80);
-  if (company && !name) return { error: 'Write the name of the company employee who does the bending' };
+  const lead = str(leader, 80);
+  if (company && !name) return { error: 'Write the name of the company person who does the bending' };
+  if (company && !lead) return { error: 'Write the name of the company team leader' };
+  if (company && lead.toUpperCase() === name.toUpperCase()) return { error: 'The company team leader and the person must be different' };
   m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by; m.byCompany = !!company;
-  if (company) { const cp = findCompanyPerson(name); m.companyWorker = cp ? cp.name : name; m.companyWorkerId = cp ? cp.id : null; }
+  if (company) {
+    const cp = findCompanyPerson(name); m.companyWorker = cp ? cp.name : name; m.companyWorkerId = cp ? cp.id : null;
+    const cl = findCompanyPerson(lead); m.companyLeader = cl ? cl.name : lead; m.companyLeaderId = cl ? cl.id : null;
+  }
   store.save();
   return { value: m };
 }
-const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, companyWorker: m.companyWorker || '', bendAmount: m.bendAmount || 0 });
+const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, companyWorker: m.companyWorker || '', companyLeader: m.companyLeader || '', bendAmount: m.bendAmount || 0 });
 const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
 app.get('/api/staff/bend', need('staff'), (req, res) => {
   migrateCompanyWorkers();
@@ -2386,8 +2407,8 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     const done = db().bend.filter((m) => m.status === 'done' && coMine(m, p) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
     return res.json({ isCompany: true, month, unitName: unitName(p.unitId),
       working: db().bend.filter((m) => m.status === 'started' && coMine(m, p)).map(bendView),
-      done: done.map((m) => ({ ...bendView(m), companyAmount: m.companyAmount || 0 })),
-      myAmount: done.reduce((t, m) => t + (m.companyAmount || 0), 0) });
+      done: done.map((m) => { const role = coRole(m, p); return { ...bendView(m), myRole: role, myAmount: role === 'leader' ? m.companyLeaderAmount || 0 : m.companyAmount || 0 }; }),
+      myAmount: done.reduce((t, m) => t + (coRole(m, p) === 'leader' ? m.companyLeaderAmount || 0 : m.companyAmount || 0), 0) });
   }
   if (!isBend(p)) return bad(res, 'Only for the bending section');
   const manager = p.role === 'bendmanager';
@@ -2412,7 +2433,7 @@ app.post('/api/staff/bend', need('staff'), (req, res) => {
 });
 // the bending leader for own machines; the bending admin for any machine of the unit
 const bendMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'bendmanager' && x.unitId === req.user.account.unitId);
-app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name, req.body.company, req.body.worker)); });
+app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name, req.body.company, req.body.worker, req.body.leader)); });
 app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
 app.post('/api/staff/bend/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2463,7 +2484,7 @@ admin.get('/bend', (req, res) => {
 });
 admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
 admin.post('/bend/move', (req, res) => { const r = bendMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
-admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company, req.body.worker)); });
+admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company, req.body.worker, req.body.leader)); });
 admin.post('/bend/:id/done', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendDone(m, req.body, 'admin')); });
 admin.post('/bend/:id/assign', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendSetLeader(m, req.body, 'admin')); });
 admin.post('/bend/:id/cancel', (req, res) => {
@@ -2822,7 +2843,8 @@ function readFabRates(rows, cur, by) {
     const model = canonModel(x && x.model);
     if (!model || out.some((o) => ASM.sameRate(o.model, model))) continue; // no empty / double rows
     const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model));
-    out.push({ model, rate: money(x && x.rate), ...(x && x.payroll !== undefined && x.payroll !== '' ? { payroll: money(x.payroll) } : old && old.payroll ? { payroll: old.payroll } : {}), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
+    const keep = (k) => (x && x[k] !== undefined && x[k] !== '' ? { [k]: money(x[k]) } : old && old[k] ? { [k]: old[k] } : {});
+    out.push({ model, rate: money(x && x.rate), ...keep('payroll'), ...keep('payrollLeader'), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
   }
   return out.slice(0, 300);
 }

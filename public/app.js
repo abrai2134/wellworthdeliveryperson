@@ -2505,7 +2505,7 @@ function fabGrouped(items, who, kind = 'fab') {
     const g = groups[n];
     const inFab = g.filter((m) => m.status === 'started').length;
     const clusters = {};
-    for (const m of g) (clusters[[m.status, m.model, m.byCompany ? 'co' + (m.companyWorker || '') : ''].join('|')] ||= []).push(m);
+    for (const m of g) (clusters[[m.status, m.model, m.byCompany ? 'co' + (m.companyLeader || '') + '|' + (m.companyWorker || '') : ''].join('|')] ||= []).push(m);
     const order = { started: 0, assigned: 1, waiting: 2, done: 3 };
     return `<div class="done-list asm-group"><div class="dl-head row"><span><b>${L.icon} ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${inFab ? ` · ${inFab} ${L.inWork.toLowerCase()}` : ''}</span></span></div>
       ${Object.values(clusters).sort((a, b) => order[a[0].status] - order[b[0].status] || a[0].model.localeCompare(b[0].model)).map((c) => fabCluster(c, who, kind)).join('')}</div>`;
@@ -2525,7 +2525,7 @@ function fabCluster(c, who, kind = 'fab') {
   const when = m.status === 'done' ? fmtTime(m.completedAt) : m.status === 'started' ? 'started ' + ageText(m.startedAt) : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : 'given ' + ageText(m.assignedAt);
   return `<details class="done-row asm-row asm-cluster"><summary>
       <span class="badge ${cls} asm-dot">${m.status === 'done' ? '✓' : m.status === 'started' ? '🔨' : m.status === 'waiting' ? '⏳' : '•'}</span>
-      <span class="dr-main"><b>${esc(m.model)}${c.length > 1 ? ` <span class="qty-tag">× ${c.length}</span>` : ''}${m.byCompany ? ` <span class="badge w4">🏢 by company${m.companyWorker ? ' – ' + esc(m.companyWorker) : ''}</span>` : ''}</b><span class="small muted">${L.helper ? (helpers ? '🧰 ' + esc(helpers) : 'no fab helper') : ''}</span></span>
+      <span class="dr-main"><b>${esc(m.model)}${c.length > 1 ? ` <span class="qty-tag">× ${c.length}</span>` : ''}${m.byCompany ? ` <span class="badge w4">🏢 by company${m.companyLeader ? ' – 👷 ' + esc(m.companyLeader) : ''}${m.companyWorker ? (m.companyLeader ? ' + ' : ' – ') + esc(m.companyWorker) : ''}</span>` : ''}</b><span class="small muted">${L.helper ? (helpers ? '🧰 ' + esc(helpers) : 'no fab helper') : ''}</span></span>
       <span class="dr-side small">${esc(label.replace(/^[^ ]+ /, ''))}<br>${esc(when)}</span>
       ${btns.length ? `<span class="row fab-btns" style="gap:4px;flex-wrap:nowrap">${btns.join('')}</span>` : ''}
     </summary><div class="dr-body">${c.map((x) => fabRow(x, who, kind)).join('')}</div></details>`;
@@ -2567,14 +2567,15 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
   // 🏢 Start by company: who of the company does the bending (gets the payroll incentive)
   const startByCompany = (ids) => {
     openModal(`<h2>🏢 Start by company</h2><div class="muted small">${ids.length} machine${ids.length > 1 ? 's' : ''} – the bending leader gets no bending rate; the company employee gets the payroll bending incentive.</div>
-      <label>Company employee doing the bending *</label><input name="worker" list="bend-workers" required placeholder="name">
+      <label>Company team leader *</label><input name="leader" list="bend-workers" required placeholder="name">
+      <label>Company person doing the bending *</label><input name="worker" list="bend-workers" required placeholder="name">
       <datalist id="bend-workers">${(state.bendWorkers || []).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">🏢 Start</button></div>`,
     async (fd) => {
-      const worker = String(fd.get('worker') || '').trim();
-      if (!worker) throw new Error('Write the name of the company employee');
-      for (const id of ids) await api(`${base}/${id}/start`, { method: 'POST', body: { company: true, worker } });
-      toast(`${ids.length} started by ${worker} (company)`);
+      const worker = String(fd.get('worker') || '').trim(), leader = String(fd.get('leader') || '').trim();
+      if (!leader || !worker) throw new Error('Write the company team leader and the company person');
+      for (const id of ids) await api(`${base}/${id}/start`, { method: 'POST', body: { company: true, worker, leader } });
+      toast(`${ids.length} started by company – ${leader} + ${worker}`);
       reload();
     });
   };
@@ -2781,22 +2782,24 @@ function fabRatesFormHtml(models) {
     <datalist id="asm-models-fr">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
     <div style="margin-top:10px"><button class="primary">Save rates</button></div>`;
 }
-// extra: a second ₹ column (e.g. { key: 'payroll', label: 'Payroll ₹' } for bending)
+// extra: more ₹ columns, e.g. [{ key: 'payrollLeader', label: 'Payroll leader ₹' }, ...] for bending
 function bindFabRates(form, rates, url, method, reload, extra) {
+  const extras = extra ? [].concat(extra) : [];
+  const xVals = (d) => Object.fromEntries(extras.map((e, i) => [e.key, d.querySelectorAll('.fr-x')[i].value]));
   const frRows = form.querySelector('.fr-rows');
   const addFr = (x, after) => {
     const div = document.createElement('div');
     div.className = 'row fr-row';
     div.style.cssText = 'margin-top:6px;flex-wrap:nowrap';
-    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>${extra ? 'Contractor ₹' : 'Rate ₹'}</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:90px">${extra ? `<span>${extra.label}</span><input class="fr-x" type="number" min="0" value="${esc(x[extra.key] ?? '')}" style="width:90px">` : ''}${x.addedBy ? `<span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
+    div.innerHTML = `<input class="fr-m" list="asm-models-fr" placeholder="Model no." value="${esc(x.model || '')}" style="flex:1"><span>${extras.length ? 'Contractor ₹' : 'Rate ₹'}</span><input class="fr-r" type="number" min="0" value="${esc(x.rate ?? '')}" style="width:80px">${extras.map((e) => `<span>${e.label}</span><input class="fr-x" type="number" min="0" value="${esc(x[e.key] ?? '')}" style="width:80px">`).join('')}${x.addedBy ? `<span class="badge manual">by ${esc(x.addedBy)}</span>` : ''}<button type="button" class="link small fr-copy">⧉ Copy</button><button type="button" class="link danger fr-del">✕</button>`;
     div.querySelector('.fr-del').onclick = () => div.remove();
-    div.querySelector('.fr-copy').onclick = () => addFr({ model: '', rate: div.querySelector('.fr-r').value, ...(extra ? { [extra.key]: div.querySelector('.fr-x').value } : {}) }, div);
+    div.querySelector('.fr-copy').onclick = () => addFr({ model: '', rate: div.querySelector('.fr-r').value, ...xVals(div) }, div);
     if (after) after.after(div); else frRows.appendChild(div);
   };
   rates.forEach((x) => addFr(x));
   if (!rates.length) addFr({});
   form.querySelector('.fr-add').onclick = () => addFr({});
-  const collect = () => [...frRows.querySelectorAll('.fr-row')].map((d) => ({ model: d.querySelector('.fr-m').value, rate: d.querySelector('.fr-r').value, ...(extra ? { [extra.key]: d.querySelector('.fr-x').value } : {}) })).filter((x) => x.model.trim());
+  const collect = () => [...frRows.querySelectorAll('.fr-row')].map((d) => ({ model: d.querySelector('.fr-m').value, rate: d.querySelector('.fr-r').value, ...xVals(d) })).filter((x) => x.model.trim());
   if (url) form.onsubmit = async (e) => {
     e.preventDefault();
     try { await api(url, { method, body: { contractorRates: collect() } }); toast('Fab rates saved'); reload(); } catch (ex) { toast(ex.message, true); }
@@ -2846,8 +2849,8 @@ function renderBendCompany(r) {
   wrap.innerHTML = `<div class="hero"><div class="label">${esc(r.unitName || '')}</div><div class="big">🏢 My bending incentive</div><div class="line">${esc(r.month)}: <b>${r.done.length}</b> machine${r.done.length === 1 ? '' : 's'} · <b>₹${r.myAmount}</b></div></div>
     ${r.working.length ? `<div class="card section"><h3 style="margin-top:0">🔧 Bending now (${r.working.length})</h3>${r.working.map((m) => `<div class="small">${esc(m.model)} <span class="muted">– started ${esc(fmtTime(m.startedAt))}</span></div>`).join('')}</div>` : ''}
     <div class="card section"><div class="row"><h3 style="margin:0">✓ My bending done – ${esc(r.month)} · <span class="badge ok">₹${r.myAmount}</span></h3><div class="spacer"></div><input type="month" id="bend-month" value="${esc(r.month)}" style="width:auto"></div>
-      ${r.done.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Done</th><th>Model no.</th><th>Unit</th><th class="num">Incentive</th></tr></thead><tbody>${r.done.map((m, i) => `<tr><td>${i + 1}</td><td class="small">${esc(fmtTime(m.completedAt))}</td><td>${esc(m.model)}</td><td>${esc(m.unitName || '')}</td><td class="num">₹${m.companyAmount}</td></tr>`).join('')}</tbody></table></div>` : '<div class="muted small" style="margin-top:8px">Nothing this month.</div>'}
-      <div class="small muted" style="margin-top:4px">Incentive per machine is the model's payroll bending rate set by the admin.</div></div>`;
+      ${r.done.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Done</th><th>Model no.</th><th>As</th><th class="num">Incentive</th></tr></thead><tbody>${r.done.map((m, i) => `<tr><td>${i + 1}</td><td class="small">${esc(fmtTime(m.completedAt))}</td><td>${esc(m.model)}<div class="small muted">${esc(m.unitName || '')}</div></td><td class="small">${m.myRole === 'leader' ? `👷 Team leader<div class="muted">with ${esc(m.companyWorker || '')}</div>` : `Person${m.companyLeader ? `<div class="muted">leader ${esc(m.companyLeader)}</div>` : ''}`}</td><td class="num">₹${m.myAmount}</td></tr>`).join('')}</tbody></table></div>` : '<div class="muted small" style="margin-top:8px">Nothing this month.</div>'}
+      <div class="small muted" style="margin-top:4px">Incentive per machine is the model's payroll bending rate (team leader or person) set by the admin.</div></div>`;
   document.getElementById('bend-month').onchange = (e) => { state.bendMonth = e.target.value; renderStaff(); };
 }
 
@@ -2869,8 +2872,8 @@ async function adminBendHtml() {
       <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Bending leader</th><th class="num">Bending done</th><th class="num">By company</th><th class="num">Bending amount</th></tr></thead><tbody>
       ${r.board.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b><div class="small muted">${esc(x.unitName)}</div></td><td class="num"><b>${x.done}</b></td><td class="num">${x.byCompany || '—'}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No bending leader yet.</td></tr>'}
       </tbody></table></div><div class="small muted" style="margin-top:4px">The leader earns the model's bending rate for each machine started with ▶ Start and marked Bending done; machines started with 🏢 Start by company earn nothing.</div></div>
-    <form class="card section" id="bend-rates">${fabRatesFormHtml(await loadMachineList()).replace('💰 Fab contractor rate per model', '💰 Bending rate per model').replace('Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.', '<b>Contractor ₹</b>: paid to the bending leader for each machine finished in bending. <b>Payroll ₹</b>: incentive for the company employee when the bending is done by the company (🏢 Start by company).')}</form>
-    ${r.companyBoard.length ? `<div class="card section"><h2 style="margin:0">🏢 Bending by company employees – ${esc(r.month)}</h2><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Employee</th><th>Unit</th><th class="num">Bending done</th><th class="num">Incentive</th></tr></thead><tbody>${r.companyBoard.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.unitName)}</td><td class="num">${x.done}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}</tbody></table></div></div>` : ''}
+    <form class="card section" id="bend-rates">${fabRatesFormHtml(await loadMachineList()).replace('💰 Fab contractor rate per model', '💰 Bending rate per model').replace('Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.', '<b>Contractor ₹</b>: paid to the bending leader for each machine finished in bending. <b>Payroll leader ₹</b> and <b>Payroll person ₹</b>: incentive for the company team leader and the company person when the bending is done by the company (🏢 Start by company).')}</form>
+    ${r.companyBoard.length ? `<div class="card section"><h2 style="margin:0">🏢 Bending by company employees – ${esc(r.month)}</h2><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Employee</th><th>Unit</th><th class="num">As team leader</th><th class="num">As person</th><th class="num">Incentive</th></tr></thead><tbody>${r.companyBoard.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.unitName)}</td><td class="num">${x.asLeader || '—'}${x.asLeader ? ` <span class="small muted">₹${x.leaderAmount}</span>` : ''}</td><td class="num">${x.asPerson || '—'}${x.asPerson ? ` <span class="small muted">₹${x.personAmount}</span>` : ''}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div id="bend-list">${fabSummaryHtml(r.items, '/admin/bend/move', 'bend')}${fabGrouped(r.items, 'admin', 'bend')}
     ${r.done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Bending done – last 30 days (${r.done.length})</b></summary><div class="done-list" style="margin-top:8px">${r.done.map((m) => fabRow(m, 'admin', 'bend')).join('')}</div></details>` : ''}</div>
     <hr style="margin:24px 0">`;
@@ -2882,7 +2885,7 @@ function bindAdminBend(main) {
   document.getElementById('bend-add-a').onclick = fabAddForm('/admin/bend', renderAdmin, A().units.filter((u) => u.active), null, 'bend');
   document.getElementById('bend-add-leader').onclick = () => personForm(null, null, 'bendleader');
   document.getElementById('bend-add-mgr').onclick = () => personForm(null, null, 'bendmanager');
-  bindFabRates(document.getElementById('bend-rates'), r.settings.contractorRates || [], '/admin/bend/settings', 'PUT', renderAdmin, { key: 'payroll', label: 'Payroll ₹' });
+  bindFabRates(document.getElementById('bend-rates'), r.settings.contractorRates || [], '/admin/bend/settings', 'PUT', renderAdmin, [{ key: 'payrollLeader', label: 'Payroll leader ₹' }, { key: 'payroll', label: 'Payroll person ₹' }]);
   document.getElementById('bend-board-month').onchange = (e) => { state.bendBoardMonth = e.target.value; renderAdmin(); };
   document.getElementById('bend-add-co').onclick = () => personForm(null, null, 'bendcompany');
   document.getElementById('bend-set').onsubmit = async (e) => { e.preventDefault(); try { await api('/admin/bend/settings', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } };
