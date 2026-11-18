@@ -2834,6 +2834,9 @@ async function adminBendHtml() {
       <div class="card"><div class="row"><h3 style="margin:0">🧑‍💼 Bending admins</h3><div class="spacer"></div><button class="small" id="bend-add-mgr">+ Add</button></div><div class="small muted">Log in with 🔩 Bending and give the unit's machines to bending leaders.</div>${people('bendmanager').map(person).join('') || '<div class="small muted">None yet.</div>'}</div>
       <div class="card"><div class="row"><h3 style="margin:0">🔩 Bending leaders</h3><div class="spacer"></div><button class="small" id="bend-add-leader">+ Add</button></div>${people('bendleader').map(person).join('') || '<div class="small muted">None yet – add one (give a PIN so they can log in).</div>'}</div>
       <div class="card"><h3 style="margin-top:0">⚙️ Bending settings</h3><form id="bend-set"><label>Max pending per bending leader</label><input name="maxPending" type="number" min="1" max="100" value="${esc(r.settings.maxPending)}"><div style="margin-top:8px"><button class="primary small">Save</button></div></form></div>
+      <div class="card"><h3 style="margin-top:0">🏢 Company bending employees</h3><div class="muted small">Names offered when someone presses 🏢 Start by company.</div>
+        <div id="bend-cw" style="margin:8px 0">${(r.settings.companyWorkers || []).map((n, i) => `<span class="badge" style="margin:2px">${esc(n)} <button class="link danger small" data-cw-del="${i}">✕</button></span>`).join('') || '<span class="muted small">No names yet.</span>'}</div>
+        <form id="bend-cw-add" class="row" style="gap:6px"><input name="name" placeholder="Employee name" required style="flex:1"><button class="primary small">+ Add</button></form></div>
     </div>
     <div class="card section"><div class="row"><h2 style="margin:0">🏆 Bending scoreboard</h2><div class="spacer"></div><input type="month" id="bend-board-month" value="${esc(r.month)}" style="width:auto"></div>
       <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Bending leader</th><th class="num">Bending done</th><th class="num">By company</th><th class="num">Bending amount</th></tr></thead><tbody>
@@ -2854,6 +2857,9 @@ function bindAdminBend(main) {
   document.getElementById('bend-add-mgr').onclick = () => personForm(null, null, 'bendmanager');
   bindFabRates(document.getElementById('bend-rates'), r.settings.contractorRates || [], '/admin/bend/settings', 'PUT', renderAdmin, { key: 'payroll', label: 'Payroll ₹' });
   document.getElementById('bend-board-month').onchange = (e) => { state.bendBoardMonth = e.target.value; renderAdmin(); };
+  const saveCw = async (list) => { try { await api('/admin/bend/settings', { method: 'PUT', body: { companyWorkers: list } }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } };
+  document.getElementById('bend-cw-add').onsubmit = (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) saveCw([...(r.settings.companyWorkers || []), n]); };
+  main.querySelectorAll('[data-cw-del]').forEach((b) => (b.onclick = () => { if (confirm('Remove this name from the list? (machines already done keep it)')) saveCw((r.settings.companyWorkers || []).filter((_, i) => i !== +b.dataset.cwDel)); }));
   document.getElementById('bend-set').onsubmit = async (e) => { e.preventDefault(); try { await api('/admin/bend/settings', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } };
 }
 

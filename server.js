@@ -2266,6 +2266,8 @@ function bendBoard(month) {
     return { id: p.id, name: p.name, unitName: unitName(p.unitId), done: mine.length, byCompany: mine.filter((m) => m.byCompany).length, amount: mine.reduce((t, m) => t + (m.bendAmount || 0), 0) };
   }).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
 }
+// names offered in the Start by company box: the admin's list of company bending employees first
+const bendWorkers = () => { const list = FAB.settings(db(), 'bend').companyWorkers || []; return list.length ? [...list] : [...new Set(db().bend.map((m) => m.companyWorker).filter(Boolean))].sort(); };
 // company (payroll) employees who did bending: machines and their bending incentive
 function bendCompanyBoard(month) {
   const g = {};
@@ -2372,7 +2374,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
-    workers: [...new Set([...db().people.filter((x) => !x.deleted && x.payType === 'payroll').map((x) => x.name), ...db().bend.map((m) => m.companyWorker).filter(Boolean)])].sort(),
+    workers: bendWorkers(),
     myAmount: p.role === 'bendleader' ? db().bend.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.bendAmount || 0), 0) : null,
   });
 });
@@ -2408,7 +2410,7 @@ admin.get('/bend', (req, res) => {
     month: monthOf(req.query.month),
     board: bendBoard(monthOf(req.query.month)),
     companyBoard: bendCompanyBoard(monthOf(req.query.month)),
-    workers: [...new Set([...db().people.filter((p) => !p.deleted && p.payType === 'payroll').map((p) => p.name), ...db().bend.map((m) => m.companyWorker).filter(Boolean)])].sort(),
+    workers: bendWorkers(),
   });
 });
 admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
@@ -2432,6 +2434,7 @@ admin.put('/bend/settings', (req, res) => {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
     contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
+    companyWorkers: Array.isArray(req.body.companyWorkers) ? [...new Map(req.body.companyWorkers.map((n) => str(n, 80)).filter(Boolean).map((n) => [n.toUpperCase(), n])).values()].slice(0, 200) : cur.companyWorkers || [],
   };
   refreshBendAmounts();
   bendAssign();
