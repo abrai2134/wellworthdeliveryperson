@@ -2266,14 +2266,31 @@ function bendBoard(month) {
     return { id: p.id, name: p.name, unitName: unitName(p.unitId), done: mine.length, byCompany: mine.filter((m) => m.byCompany).length, amount: mine.reduce((t, m) => t + (m.bendAmount || 0), 0) };
   }).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
 }
-// names offered in the Start by company box: the admin's list of company bending employees first
-const bendWorkers = () => { const list = FAB.settings(db(), 'bend').companyWorkers || []; return list.length ? [...list] : [...new Set(db().bend.map((m) => m.companyWorker).filter(Boolean))].sort(); };
+// Company bending employees are people (role bendcompany, payroll) with their own login to see
+// their bending incentive. Names from the earlier plain list become such people (no login yet).
+function migrateCompanyWorkers() {
+  const set = db().settings.bend;
+  if (!set || !Array.isArray(set.companyWorkers)) return;
+  for (const n of set.companyWorkers) {
+    if (db().people.some((p) => p.role === 'bendcompany' && !p.deleted && p.name.toUpperCase() === String(n).toUpperCase())) continue;
+    db().people.push({ id: newId('per'), name: String(n), phone: '', username: '', role: 'bendcompany', unitId: '', backup: false, active: true, incentiveCut: 0, payType: 'payroll', passHash: null, baseline: 0, createdAt: today() });
+  }
+  delete set.companyWorkers;
+  store.save();
+}
+const companyPeople = (unitId) => db().people.filter((p) => p.role === 'bendcompany' && !p.deleted && (!unitId || !p.unitId || p.unitId === unitId));
+const findCompanyPerson = (name) => db().people.find((p) => p.role === 'bendcompany' && !p.deleted && p.name.trim().toUpperCase() === String(name || '').trim().toUpperCase());
+// is this machine bent by that company employee (by id, or by name for older entries)
+const coMine = (m, p) => m.byCompany && (m.companyWorkerId ? m.companyWorkerId === p.id : (m.companyWorker || '').trim().toUpperCase() === p.name.trim().toUpperCase());
+// names offered in the Start by company box
+const bendWorkers = (unitId) => [...new Set(companyPeople(unitId).filter((p) => p.active).map((p) => p.name))].sort();
+const coPersonView = (p) => ({ id: p.id, name: p.name, phone: p.phone || '', username: p.username || '', unitId: p.unitId || '', unitName: unitName(p.unitId), active: !!p.active, canLogin: !!p.passHash });
 // company (payroll) employees who did bending: machines and their bending incentive
 function bendCompanyBoard(month) {
   const g = {};
   for (const m of db().bend) {
     if (m.status !== 'done' || !m.byCompany || (m.completedAt || '').slice(0, 7) !== month) continue;
-    const k = (m.companyWorker || '?').trim().toUpperCase();
+    const k = m.companyWorkerId || (m.companyWorker || '?').trim().toUpperCase();
     const x = (g[k] ||= { name: m.companyWorker || '(name not entered)', unitName: unitName(m.unitId), done: 0, amount: 0 });
     x.done++; x.amount += m.companyAmount || 0;
   }
@@ -2354,16 +2371,25 @@ function bendStart(m, by, company, worker) {
   const name = str(worker, 80);
   if (company && !name) return { error: 'Write the name of the company employee who does the bending' };
   m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by; m.byCompany = !!company;
-  if (company) m.companyWorker = name;
+  if (company) { const cp = findCompanyPerson(name); m.companyWorker = cp ? cp.name : name; m.companyWorkerId = cp ? cp.id : null; }
   store.save();
   return { value: m };
 }
 const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, companyWorker: m.companyWorker || '', bendAmount: m.bendAmount || 0 });
 const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
 app.get('/api/staff/bend', need('staff'), (req, res) => {
+  migrateCompanyWorkers();
   const p = req.user.account;
-  if (!isBend(p)) return bad(res, 'Only for the bending section');
   const month = monthOf(req.query.month);
+  if (p.role === 'bendcompany') {
+    // company bending employee: own bending this month and the incentive
+    const done = db().bend.filter((m) => m.status === 'done' && coMine(m, p) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+    return res.json({ isCompany: true, month, unitName: unitName(p.unitId),
+      working: db().bend.filter((m) => m.status === 'started' && coMine(m, p)).map(bendView),
+      done: done.map((m) => ({ ...bendView(m), companyAmount: m.companyAmount || 0 })),
+      myAmount: done.reduce((t, m) => t + (m.companyAmount || 0), 0) });
+  }
+  if (!isBend(p)) return bad(res, 'Only for the bending section');
   const manager = p.role === 'bendmanager';
   const mine = (m) => (manager ? m.unitId === p.unitId : m.leaderId === p.id);
   res.json({
@@ -2374,7 +2400,8 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
-    workers: bendWorkers(),
+    workers: bendWorkers(p.unitId),
+    companyPeople: manager ? companyPeople(p.unitId).map(coPersonView) : [],
     myAmount: p.role === 'bendleader' ? db().bend.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.bendAmount || 0), 0) : null,
   });
 });
@@ -2400,7 +2427,28 @@ app.post('/api/staff/bend/move', need('staff'), (req, res) => {
   if (r.error) return bad(res, r.error);
   res.json({ ok: true, ...r.value });
 });
+// the bending admin adds / edits company bending employees of the unit (with their login PIN)
+function staffCoSave(req, res, existing) {
+  const p = req.user.account;
+  if (p.role !== 'bendmanager') return bad(res, 'Only the bending admin can add company employees');
+  const r = readPerson({ ...req.body, role: 'bendcompany', unitId: p.unitId, payType: 'payroll', backup: false, incentiveCut: 0, active: req.body.active !== false }, existing);
+  if (r.error) return bad(res, r.error);
+  if (findCompanyPerson(r.value.name) && findCompanyPerson(r.value.name) !== existing) return bad(res, 'A company employee with this name already exists');
+  if (existing) Object.assign(existing, r.value);
+  else db().people.push((existing = { id: newId('per'), ...r.value, passHash: null, baseline: 0, createdAt: today(), addedBy: p.name + ' (bending admin)' }));
+  if (r.password) existing.passHash = auth.hashPassword(r.password);
+  if (req.body.removeLogin) existing.passHash = null;
+  store.save();
+  res.json({ ok: true, id: existing.id });
+}
+app.post('/api/staff/bend/workers', need('staff'), (req, res) => staffCoSave(req, res, null));
+app.put('/api/staff/bend/workers/:id', need('staff'), (req, res) => {
+  const w = db().people.find((x) => x.id === req.params.id && x.role === 'bendcompany' && !x.deleted && (!x.unitId || x.unitId === req.user.account.unitId));
+  if (!w) return res.status(404).json({ error: 'Not found' });
+  staffCoSave(req, res, w);
+});
 admin.get('/bend', (req, res) => {
+  migrateCompanyWorkers();
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   res.json({
     items: db().bend.filter((m) => FAB.OPEN.includes(m.status)).map(bendView),
@@ -2434,7 +2482,6 @@ admin.put('/bend/settings', (req, res) => {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
     contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
-    companyWorkers: Array.isArray(req.body.companyWorkers) ? [...new Map(req.body.companyWorkers.map((n) => str(n, 80)).filter(Boolean).map((n) => [n.toUpperCase(), n])).values()].slice(0, 200) : cur.companyWorkers || [],
   };
   refreshBendAmounts();
   bendAssign();
