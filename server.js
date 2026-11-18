@@ -2380,12 +2380,12 @@ function bendMove(body, by, unitId) {
   const model = str(body.model, 120);
   const toP = db().people.find((p) => p.id === to && p.role === 'bendleader' && p.active && !p.deleted);
   if (!toP || to === from) return { error: 'Choose the bending leader to move them to' };
-  const list = db().bend.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+  const list = db().bend.filter((m) => (from ? m.leaderId === from && m.status === 'assigned' : !m.leaderId && m.status === 'waiting') && m.model === model && (!unitId || m.unitId === unitId));
   if (!list.length) return { error: 'No machine of this model is waiting to start with that bending leader' };
   if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a bending leader of the same unit' };
   const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
   const at = new Date().toISOString();
-  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId }, to: { leaderId: to } }); m.leaderId = to; m.assignedAt = at; m.manual = true; }
+  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId }, to: { leaderId: to } }); m.leaderId = to; m.status = 'assigned'; m.assignedAt = at; m.manual = true; }
   store.save();
   return { value: { id: '', moved: qty } };
 }
@@ -2767,7 +2767,7 @@ function fabMove(body, by, unitId) {
   if (body.toBend) {
     // ⇄ Move back to Bending: the machines leave fab (not shown there any more) and go to the
     // unit's bending again, shared fairly between its bending leaders
-    const list = db().fab.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+    const list = db().fab.filter((m) => (from ? m.leaderId === from && m.status === 'assigned' : !m.leaderId && m.status === 'waiting') && m.model === model && (!unitId || m.unitId === unitId));
     if (!list.length) return { error: 'No machine of this model is waiting to start with that fab leader' };
     const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
     const at = new Date().toISOString();
@@ -2784,14 +2784,14 @@ function fabMove(body, by, unitId) {
   if (!to || to === from) return { error: 'Choose the fab leader to move them to' };
   const toP = db().people.find((p) => p.id === to && p.role === 'fableader' && p.active && !p.deleted);
   if (!toP) return { error: 'Choose a fab team leader' };
-  const list = db().fab.filter((m) => m.leaderId === from && m.model === model && m.status === 'assigned' && (!unitId || m.unitId === unitId));
+  const list = db().fab.filter((m) => (from ? m.leaderId === from && m.status === 'assigned' : !m.leaderId && m.status === 'waiting') && m.model === model && (!unitId || m.unitId === unitId));
   if (!list.length) return { error: 'No machine of this model is waiting to start with that fab leader' };
   if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a fab leader of the same unit' };
   const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
   const at = new Date().toISOString();
   for (const m of list.slice(0, qty)) {
     (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId: to } });
-    m.leaderId = to; m.assignedAt = at; m.manual = true;
+    m.leaderId = to; m.status = 'assigned'; m.assignedAt = at; m.manual = true;
     m.helperId = null; // a helper of the new leader's unit is picked again
   }
   fabAssign();
@@ -2799,11 +2799,12 @@ function fabMove(body, by, unitId) {
   return { value: { id: '', moved: qty } };
 }
 // Admin corrects a fab order line (fab leader + model): wrong model no., or too many entered.
-admin.post('/fab/correct', (req, res) => {
+admin.post(['/fab/correct', '/bend/correct'], (req, res) => {
+  const isBend = req.path.startsWith('/bend');
   const leaderId = str(req.body.leaderId);
   const model = str(req.body.model, 120);
   const unitId = str(req.body.unitId);
-  const list = db().fab.filter((m) => (m.leaderId || '') === leaderId && m.model === model && FAB.OPEN.includes(m.status) && (!unitId || m.unitId === unitId))
+  const list = db()[isBend ? 'bend' : 'fab'].filter((m) => (m.leaderId || '') === leaderId && m.model === model && FAB.OPEN.includes(m.status) && (!unitId || m.unitId === unitId))
     .sort((a, b) => (a.status === 'started') - (b.status === 'started')); // not started first
   if (!list.length) return bad(res, 'Those machines are no longer open – refresh the page');
   const qty = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
@@ -2812,14 +2813,14 @@ admin.post('/fab/correct', (req, res) => {
     const reason = str(req.body.reason, 150);
     if (!reason) return bad(res, 'Write why they are removed');
     for (const m of list.slice(0, qty)) { m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = 'admin'; m.cancelReason = reason; }
-    fabAssign();
+    if (isBend) bendAssign(); else fabAssign();
     store.save();
     return res.json({ ok: true, changed: qty });
   }
   const newModel = canonModel(req.body.newModel);
   if (!newModel) return bad(res, 'Enter the correct model no.');
   if (newModel === model) return bad(res, 'The model no. is the same');
-  { const miss = fabRateMissing(newModel); if (miss) return bad(res, miss); }
+  if (!isBend) { const miss = fabRateMissing(newModel); if (miss) return bad(res, miss); }
   for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by: 'admin', model: { from: m.model, to: newModel } }); m.model = newModel; }
   store.save();
   res.json({ ok: true, changed: qty, model: newModel });

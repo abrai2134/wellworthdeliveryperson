@@ -2542,7 +2542,7 @@ function fabSummaryHtml(items, moveUrl, kind = 'fab') {
   }
   const names = Object.keys(g).sort();
   if (!names.length) return '';
-  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.leaderId && r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">⇄ Move</button>` : ''}${moveUrl.startsWith('/admin') && kind === 'fab' ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
+  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">${r.leaderId ? '⇄ Move' : '👷 Give to ' + L.leader}</button>` : ''}${moveUrl.startsWith('/admin') ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
   return `<div class="card section"><h3 style="margin-top:0">📦 ${L.Name} – given to each ${L.leader}</h3><div class="table-wrap"><table><thead><tr><th>${L.Leader}</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">${L.inWork}</th>${moveUrl ? '<th></th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
 }
 function fabAddForm(url, reload, units, myUnit, kind = 'fab') {
@@ -2731,7 +2731,7 @@ document.addEventListener('click', async (e) => {
   if (!b) return;
   const [leaderId, unitId, max] = b.dataset.fabCorrect.split('|');
   const models = await loadMachineList();
-  openModal(`<h2>✎ Correct fab order</h2><div class="muted">${esc(b.dataset.model)} · <b>${esc(b.dataset.name)}</b> (${max} open)</div>
+  openModal(`<h2>✎ Correct ${b.dataset.kind === 'bend' ? 'bending' : 'fab'} order</h2><div class="muted">${esc(b.dataset.model)} · <b>${esc(b.dataset.name)}</b> (${max} open)</div>
     <label>What is wrong? *</label>
     <div class="row"><label class="check"><input type="radio" name="action" value="model" checked> ✎ Wrong model no.</label><label class="check"><input type="radio" name="action" value="remove"> ➖ Entered by mistake – remove</label></div>
     <div id="fc-model"><label>Correct model no. *</label><input name="newModel" list="asm-models-fc" placeholder="type and pick from the list"></div>
@@ -2745,7 +2745,7 @@ document.addEventListener('click', async (e) => {
     if (action === 'model' && !String(fd.get('newModel') || '').trim()) throw new Error('Enter the correct model no.');
     if (action === 'remove' && !String(fd.get('reason') || '').trim()) throw new Error('Write why they are removed');
     if (action === 'remove' && !confirm(`Remove ${fd.get('qty')} × ${b.dataset.model}?`)) return;
-    const r = await api('/admin/fab/correct', { method: 'POST', body: { leaderId, unitId, model: b.dataset.model, action, newModel: fd.get('newModel'), reason: fd.get('reason'), qty: fd.get('qty') } });
+    const r = await api(`/admin/${b.dataset.kind === 'bend' ? 'bend' : 'fab'}/correct`, { method: 'POST', body: { leaderId, unitId, model: b.dataset.model, action, newModel: fd.get('newModel'), reason: fd.get('reason'), qty: fd.get('qty') } });
     toast(action === 'remove' ? `${r.changed} removed` : `${r.changed} changed to ${r.model}`);
     renderAdmin();
   });
