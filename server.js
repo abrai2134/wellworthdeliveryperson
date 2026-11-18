@@ -2246,11 +2246,15 @@ const fabLeaders = () => db().people.filter((p) => p.role === 'fableader' && p.a
 const bendAssign = () => FAB.assignWaiting(db(), db().settings.timezone, 'bend');
 const bendRates = () => (FAB.settings(db(), 'bend').contractorRates || []);
 const bendRateOf = (model) => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.rate) || 0) : null; };
+// incentive for the company (payroll) employee who did the bending
+const bendPayrollOf = (model) => { const r = bendRates().find((x) => ASM.sameRate(x.model, model)); return r ? Math.max(0, Number(r.payroll) || 0) : 0; };
 // done before the rate existed: fill in (last 2 months; not for company bending)
 function refreshBendAmounts() {
   const since = new Date(Date.now() - 62 * 86400000).toISOString();
   for (const m of db().bend) {
-    if (m.status !== 'done' || m.byCompany || !m.leaderId || m.bendAmount || (m.completedAt || '') < since) continue;
+    if (m.status !== 'done' || (m.completedAt || '') < since) continue;
+    if (m.byCompany) { if (!m.companyAmount) m.companyAmount = bendPayrollOf(m.model); continue; }
+    if (!m.leaderId || m.bendAmount) continue;
     const r = bendRateOf(m.model);
     if (r > 0) { m.bendRate = r; m.bendAmount = r; }
   }
@@ -2261,6 +2265,17 @@ function bendBoard(month) {
     const mine = done.filter((m) => m.leaderId === p.id);
     return { id: p.id, name: p.name, unitName: unitName(p.unitId), done: mine.length, byCompany: mine.filter((m) => m.byCompany).length, amount: mine.reduce((t, m) => t + (m.bendAmount || 0), 0) };
   }).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
+}
+// company (payroll) employees who did bending: machines and their bending incentive
+function bendCompanyBoard(month) {
+  const g = {};
+  for (const m of db().bend) {
+    if (m.status !== 'done' || !m.byCompany || (m.completedAt || '').slice(0, 7) !== month) continue;
+    const k = (m.companyWorker || '?').trim().toUpperCase();
+    const x = (g[k] ||= { name: m.companyWorker || '(name not entered)', unitName: unitName(m.unitId), done: 0, amount: 0 });
+    x.done++; x.amount += m.companyAmount || 0;
+  }
+  return Object.values(g).sort((a, b) => b.done - a.done || a.name.localeCompare(b.name));
 }
 function bendAdd(body, by, creator) {
   const unit = liveUnit(str(body.unitId));
@@ -2283,6 +2298,7 @@ function bendDone(m, body, by) {
   // bending leader earns the model's bending rate – not when the company did the bending
   m.bendRate = bendRateOf(m.model) || 0;
   m.bendAmount = m.byCompany || !m.leaderId ? 0 : m.bendRate;
+  if (m.byCompany) m.companyAmount = bendPayrollOf(m.model); // incentive to the company employee
   // into Fab for the same unit (shared between its fab leaders as usual)
   const f = { id: newId('fab'), unitId: m.unitId, model: m.model, status: 'waiting', source: 'bend', bendId: m.id, createdAt: m.completedAt, createdBy: `${by} (bending done)`, creator: { role: 'bend', id: m.leaderId } };
   // same person in fab: the fab leader of this unit with the same name as the bending leader
@@ -2331,13 +2347,16 @@ function bendMove(body, by, unitId) {
   return { value: { id: '', moved: qty } };
 }
 // company: the bending is done by the company / payroll people – no bending rate for the leader.
-function bendStart(m, by, company) {
+function bendStart(m, by, company, worker) {
   if (m.status !== 'assigned') return { error: m.status === 'waiting' ? 'No bending leader yet' : 'Already started or finished' };
+  const name = str(worker, 80);
+  if (company && !name) return { error: 'Write the name of the company employee who does the bending' };
   m.status = 'started'; m.startedAt = new Date().toISOString(); m.startedBy = by; m.byCompany = !!company;
+  if (company) m.companyWorker = name;
   store.save();
   return { value: m };
 }
-const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, bendAmount: m.bendAmount || 0 });
+const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, companyWorker: m.companyWorker || '', bendAmount: m.bendAmount || 0 });
 const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
 app.get('/api/staff/bend', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2353,6 +2372,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
+    workers: [...new Set([...db().people.filter((x) => !x.deleted && x.payType === 'payroll').map((x) => x.name), ...db().bend.map((m) => m.companyWorker).filter(Boolean)])].sort(),
     myAmount: p.role === 'bendleader' ? db().bend.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.bendAmount || 0), 0) : null,
   });
 });
@@ -2363,7 +2383,7 @@ app.post('/api/staff/bend', need('staff'), (req, res) => {
 });
 // the bending leader for own machines; the bending admin for any machine of the unit
 const bendMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'bendmanager' && x.unitId === req.user.account.unitId);
-app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name, req.body.company)); });
+app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name, req.body.company, req.body.worker)); });
 app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
 app.post('/api/staff/bend/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;
@@ -2387,11 +2407,13 @@ admin.get('/bend', (req, res) => {
     settings: FAB.settings(db(), 'bend'),
     month: monthOf(req.query.month),
     board: bendBoard(monthOf(req.query.month)),
+    companyBoard: bendCompanyBoard(monthOf(req.query.month)),
+    workers: [...new Set([...db().people.filter((p) => !p.deleted && p.payType === 'payroll').map((p) => p.name), ...db().bend.map((m) => m.companyWorker).filter(Boolean)])].sort(),
   });
 });
 admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
 admin.post('/bend/move', (req, res) => { const r = bendMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
-admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company)); });
+admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company, req.body.worker)); });
 admin.post('/bend/:id/done', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendDone(m, req.body, 'admin')); });
 admin.post('/bend/:id/assign', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendSetLeader(m, req.body, 'admin')); });
 admin.post('/bend/:id/cancel', (req, res) => {
@@ -2750,7 +2772,7 @@ function readFabRates(rows, cur, by) {
     const model = canonModel(x && x.model);
     if (!model || out.some((o) => ASM.sameRate(o.model, model))) continue; // no empty / double rows
     const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model));
-    out.push({ model, rate: money(x && x.rate), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
+    out.push({ model, rate: money(x && x.rate), ...(x && x.payroll !== undefined && x.payroll !== '' ? { payroll: money(x.payroll) } : old && old.payroll ? { payroll: old.payroll } : {}), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
   }
   return out.slice(0, 300);
 }
