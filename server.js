@@ -2456,8 +2456,17 @@ function paintOut(body, by, creator) {
 // Machines that arrived at a unit from painting and are not given out yet, per model.
 function arrivedOf(unitId) {
   const g = {};
-  for (const m of db().assembly) if (m.status === 'arrived' && m.unitId === unitId) { const x = (g[m.model] ||= { model: m.model, qty: 0, oldest: m.arrivedAt }); x.qty++; if ((m.arrivedAt || '') < x.oldest) x.oldest = m.arrivedAt; }
-  return Object.values(g).sort((a, b) => a.model.localeCompare(b.model));
+  for (const m of db().assembly) {
+    if (m.status !== 'arrived' || m.unitId !== unitId) continue;
+    const x = (g[m.model] ||= { model: m.model, qty: 0, oldest: m.arrivedAt, entries: {} });
+    x.qty++; if ((m.arrivedAt || '') < x.oldest) x.oldest = m.arrivedAt;
+    // who pressed ⬆ Out in painting (name + login) and when
+    const login = m.creator && m.creator.role === 'admin' ? 'Admin' : m.creator && m.creator.role === 'painting' ? 'Painting login' : '';
+    const text = `⬆ out of painting by ${m.createdBy === 'admin' ? 'Admin' : `${m.createdBy || '?'}${login ? ` (${login})` : ''}`}`;
+    const at = String(m.arrivedAt || '').slice(0, 16);
+    (x.entries[text + '|' + at] ||= { text, at, qty: 0 }).qty++;
+  }
+  return Object.values(g).map((x) => ({ ...x, entries: Object.values(x.entries).sort((a, b) => b.at.localeCompare(a.at)) })).sort((a, b) => a.model.localeCompare(b.model));
 }
 // "Allocate": share the arrived machines fairly between the unit's team leaders (as before).
 function allocateArrived(unitId, model, by) {
