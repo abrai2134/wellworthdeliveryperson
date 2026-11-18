@@ -2482,11 +2482,11 @@ function fabRow(m, who, kind = 'fab') {
   const [cls, label] = m.status === 'started' ? ['w3', '🔨 ' + L.inWork] : m.status === 'waiting' ? ['warn', '⏳ Waiting for a ' + L.leader] : m.status === 'done' ? ['ok', '✓ ' + L.done] : FAB_STATUS[m.status] || ['', m.status];
   const team = [m.leader && L.icon + ' ' + m.leader.name, m.helper && '🧰 ' + m.helper.name].filter(Boolean).join(' · ') || 'no team yet';
   const btns = [];
-  const canWork = who === 'admin' || (who === 'fableader' && m.leader && m.leader.id === state.me.id);
+  const canWork = who === 'admin' || who === 'manager' || (who === 'fableader' && m.leader && m.leader.id === state.me.id);
   if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-fab-start="${esc(m.id)}">▶ Start</button>`);
   if (canWork && (m.status === 'assigned' || m.status === 'started')) btns.push(`<button class="small primary" data-fab-done="${esc(m.id)}">✓ ${L.done}</button>`);
   if (who === 'admin' && m.status !== 'done') btns.push(`<button class="small" data-fab-assign="${esc(m.id)}">Change people</button><button class="small danger" data-fab-cancel="${esc(m.id)}">Cancel</button>`);
-  if (who === 'unit' && m.status !== 'done') btns.push(`<button class="small${m.leader ? '' : ' primary'}" data-fab-assign="${esc(m.id)}">${m.leader ? 'Change ' + L.leader : 'Give to ' + L.leader}</button>`);
+  if ((who === 'unit' || who === 'manager') && m.status !== 'done') btns.push(`<button class="small${m.leader ? '' : ' primary'}" data-fab-assign="${esc(m.id)}">${m.leader ? 'Change ' + L.leader : 'Give to ' + L.leader}</button>`);
   const when = m.status === 'done' ? 'done ' + fmtTime(m.completedAt) : m.status === 'started' ? 'started ' + ageText(m.startedAt) : m.status === 'waiting' ? 'waiting ' + ageText(m.createdAt) : 'given ' + ageText(m.assignedAt);
   return `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b><span class="small muted">${m.unitName ? '🏢 ' + esc(m.unitName) + ' · ' : ''}${esc(team)}</span><span class="small muted">added ${esc(fmtTime(m.createdAt))} by ${esc(m.createdBy)}</span></span>
     <span class="dr-side small"><span class="badge ${cls}">${esc(label)}</span><br>${esc(when)}</span>${btns.length ? `<span class="row" style="gap:4px">${btns.join('')}</span>` : ''}</div>`;
@@ -2514,7 +2514,7 @@ function fabCluster(c, who, kind = 'fab') {
   const m = c[0];
   const [cls, label] = m.status === 'started' ? ['w3', '🔨 ' + L.inWork] : m.status === 'waiting' ? ['warn', '⏳ Waiting'] : m.status === 'done' ? ['ok', '✓ ' + L.done] : FAB_STATUS[m.status] || ['', m.status];
   const helpers = [...new Set(c.map((x) => x.helper && x.helper.name).filter(Boolean))].join(', ');
-  const canWork = who === 'admin' || (who === 'fableader' && m.leader && m.leader.id === state.me.id);
+  const canWork = who === 'admin' || who === 'manager' || (who === 'fableader' && m.leader && m.leader.id === state.me.id);
   const ids = c.map((x) => x.id).join(',');
   const btns = [];
   if (canWork && m.status === 'assigned') btns.push(`<button class="small" data-fab-start-many="${esc(ids)}">▶ Start${c.length > 1 ? ' ' + c.length : ''}</button>`);
@@ -2788,7 +2788,7 @@ function bindFabRates(form, rates, url, method, reload) {
 async function renderBendStaff() {
   const r = await api('/staff/bend' + (state.bendMonth ? '?month=' + state.bendMonth : ''));
   state.fabLeaders = r.unitLeaders;
-  const who = r.isManager ? 'unit' : 'fableader';
+  const who = r.isManager ? 'manager' : 'fableader'; // bending admin: Start / Done and give to leaders
   const wrap = $app.querySelector('.wrap');
   wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(state.today || new Date().toISOString().slice(0, 10)))}</div><div class="big">🔩 Bending – ${r.isManager ? 'admin' : 'leader'}</div>
       <div class="line">${r.isManager ? `Give each machine to a bending leader. Bending leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : 'Tap ▶ Start when you begin a machine and ✓ Bending done when it is finished – it then goes to Fab.'}</div></div>

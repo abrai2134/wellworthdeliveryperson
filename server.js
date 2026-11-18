@@ -2264,6 +2264,11 @@ function bendDone(m, body, by) {
   m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
   // into Fab for the same unit (shared between its fab leaders as usual)
   const f = { id: newId('fab'), unitId: m.unitId, model: m.model, status: 'waiting', source: 'bend', bendId: m.id, createdAt: m.completedAt, createdBy: `${by} (bending done)`, creator: { role: 'bend', id: m.leaderId } };
+  // same person in fab: the fab leader of this unit with the same name as the bending leader
+  const bl = db().people.find((p) => p.id === m.leaderId);
+  const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const fl = bl && db().people.find((p) => p.role === 'fableader' && p.active && !p.deleted && p.unitId === m.unitId && sameName(p.name, bl.name));
+  if (fl) { f.leaderId = fl.id; f.status = 'assigned'; f.assignedAt = new Date().toISOString(); }
   db().fab.push(f);
   m.fabId = f.id;
   bendAssign();
@@ -2333,8 +2338,10 @@ app.post('/api/staff/bend', need('staff'), (req, res) => {
   if (!isBend(p)) return bad(res, 'Only bending leaders / bending admins can enter machines');
   send(res, bendAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
 });
-app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, bendStart(m, req.user.account.name)); });
-app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, (x) => x.leaderId === req.user.id); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
+// the bending leader for own machines; the bending admin for any machine of the unit
+const bendMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'bendmanager' && x.unitId === req.user.account.unitId);
+app.post('/api/staff/bend/:id/start', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendStart(m, req.user.account.name)); });
+app.post('/api/staff/bend/:id/done', need('staff'), (req, res) => { const m = bendFind(req, res, bendMayWork(req)); if (m) send(res, bendDone(m, req.body, req.user.account.name)); });
 app.post('/api/staff/bend/:id/assign', need('staff'), (req, res) => {
   const p = req.user.account;
   if (p.role !== 'bendmanager') return bad(res, 'Only the bending admin can give machines to bending leaders');
