@@ -589,7 +589,7 @@ function replace(d, body, by) {
   return { value: d };
 }
 
-const send = (res, r) => (r.error ? bad(res, r.error) : res.json({ ok: true, id: r.value && r.value.id }));
+const send = (res, r) => (r.error ? bad(res, r.error) : res.json({ ...(r.value && r.value.changed !== undefined ? { changed: r.value.changed, model: r.value.model } : {}), ok: true, id: r.value && r.value.id }));
 
 // ---------- unit login ----------
 const unit = express.Router();
@@ -2557,6 +2557,7 @@ function paintIn(body, by) {
   const list = db().painting.filter((x) => x.status === 'coming' && x.model === model).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
   if (qty > list.length) return { error: `Only ${list.length} coming from fab` };
+  if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };
   const at = new Date().toISOString();
   for (const x of list.slice(0, qty)) { x.status = 'in'; x.inAt = at; x.inBy = by; }
   store.save();
@@ -2566,7 +2567,7 @@ function paintIn(body, by) {
 function paintAdd(body, by) {
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
-  // no rate check for machines put straight into painting
+  { const miss = rateMissing(model); if (miss) return { error: miss }; } // only models with an assembly incentive rate
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const at = new Date().toISOString();
@@ -2584,6 +2585,7 @@ function paintOut(body, by, creator) {
   const list = db().painting.filter((x) => x.status === 'in' && x.model === model).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
   if (qty > list.length) return { error: `Only ${list.length} in painting` };
+  if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };
   const at = new Date().toISOString();
   for (const x of list.slice(0, qty)) {
     const m = { id: newId('asm'), unitId: unit.id, model, status: 'arrived', arrivedAt: at, source: 'paint', paintId: x.id, createdAt: at, createdBy: by, creator, entryBy: `${by} (painting)`, note: str(body.note, 200) };
@@ -2609,10 +2611,43 @@ function arrivedOf(unitId) {
   }
   return Object.values(g).map((x) => ({ ...x, entries: Object.values(x.entries).sort((a, b) => b.at.localeCompare(a.at)) })).sort((a, b) => a.model.localeCompare(b.model));
 }
+// ✎ Correct a wrong model no. on painting lines (coming / in) or on machines arrived at a unit.
+function correctModel(list, newModelRaw, qty, by) {
+  if (!list.length) return { error: 'Those machines are no longer there – refresh the page' };
+  const newModel = canonModel(newModelRaw);
+  if (!newModel) return { error: 'Enter the correct model no.' };
+  { const miss = rateMissing(newModel); if (miss) return { error: miss }; }
+  if (newModel === list[0].model) return { error: 'The model no. is the same' };
+  const n = Math.max(1, Math.min(list.length, parseInt(qty, 10) || list.length));
+  const at = new Date().toISOString();
+  for (const x of list.slice(0, n)) {
+    (x.edits = x.edits || []).push({ at, by, model: { from: x.model, to: newModel } });
+    x.model = newModel;
+    // keep the painting record and the assembly machine in step
+    const other = x.asmId ? db().assembly.find((m) => m.id === x.asmId) : x.paintId ? db().painting.find((p) => p.id === x.paintId) : null;
+    if (other) other.model = newModel;
+  }
+  store.save();
+  return { value: { id: '', changed: n, model: newModel } };
+}
+app.post('/api/painting/correct', (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
+  const status = req.body.status === 'coming' ? 'coming' : 'in';
+  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120));
+  send(res, correctModel(list, req.body.newModel, req.body.qty, painterName(req) + (req.user.role === 'admin' ? '' : ' (painting)')));
+});
+const arrivedList = (unitId, model) => db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && m.model === model);
+app.post('/api/staff/assembly/arrived/correct', need('staff'), (req, res) => {
+  const p = req.user.account;
+  if (p.role !== 'leader') return bad(res, 'Only team leaders can correct');
+  send(res, correctModel(arrivedList(p.unitId, str(req.body.model, 120)), req.body.newModel, req.body.qty, p.name));
+});
+admin.post('/assembly/arrived/correct', (req, res) => send(res, correctModel(arrivedList(str(req.body.unitId), str(req.body.model, 120)), req.body.newModel, req.body.qty, 'admin')));
 // "Allocate": share the arrived machines fairly between the unit's team leaders (as before).
 function allocateArrived(unitId, model, by) {
-  const list = db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && (!model || m.model === model));
-  if (!list.length) return { error: 'Nothing to allocate' };
+  const all = db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && (!model || m.model === model));
+  if (!all.length) return { error: 'Nothing to allocate' };
+  const list = all.filter((m) => !rateMissing(m.model)); // wrong model no. (no rate) must be corrected first
+  if (!list.length) return { error: `Model "${all[0].model}" has no assembly incentive rate – press ✎ Correct to fix the model no. first` };
   const at = new Date().toISOString();
   for (const m of list) { m.status = 'waiting'; m.allocatedAt = at; m.allocatedBy = by; }
   asmAssign();

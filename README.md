@@ -119,3 +119,4 @@ npm test
 ```
 
 Code layout: `server.js` (web server and API), `lib/scheduler.js` (allocation), `lib/store.js` (JSON file storage), `lib/auth.js` (passwords and login sessions), `public/` (the web pages).
+- **Painting model check** – ⬇ In, + Machine in (not from fab) and ⬆ Out are allowed only for models that have an **assembly incentive rate** (exact name). A wrong model no. is fixed with **✎ Correct** on the painting line (painting login / admin) or on the unit's *🎨 Arrived from painting* line (team leader of that unit / admin); Allocate refuses models without a rate until corrected.

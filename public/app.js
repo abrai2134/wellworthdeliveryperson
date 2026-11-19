@@ -1517,7 +1517,7 @@ function arrivedHtml(list, url, unitId) {
   if (!list || !list.length) return '';
   const total = list.reduce((t, x) => t + x.qty, 0);
   return `<div class="card section" style="border-color:#f0c36d"><div class="row"><h3 style="margin:0">🎨 Arrived from painting – ${total} machine${total === 1 ? '' : 's'} not given out yet</h3><div class="spacer"></div>${url ? `<button class="primary small" data-allocate="${esc(url)}|${esc(unitId || '')}|">⚖️ Allocate all</button>` : ''}</div>
-    ${list.map((x) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)} · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : `<span class="small muted">arrived ${esc(fmtTime(x.oldest))}</span>`}</span><span class="godown-qty">${x.qty}</span>${url ? `<button class="small nowrap" data-allocate="${esc(url)}|${esc(unitId || '')}|${esc(x.model)}">⚖️ Allocate</button>` : ''}</div>`).join('')}
+    ${list.map((x) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)} · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : `<span class="small muted">arrived ${esc(fmtTime(x.oldest))}</span>`}</span><span class="godown-qty">${x.qty}</span>${url ? `<button class="small nowrap" data-arrived-fix="${esc(url.replace('/allocate', '/arrived/correct'))}|${esc(unitId || '')}|${x.qty}" data-model="${esc(x.model)}">✎ Correct</button> ` : ''}${url ? `<button class="small nowrap" data-allocate="${esc(url)}|${esc(unitId || '')}|${esc(x.model)}">⚖️ Allocate</button>` : ''}</div>`).join('')}
     ${url ? '<div class="small muted" style="margin-top:6px">Allocate shares them fairly between the team leaders (fewest open first), with an installation person and a helper.</div>' : '<div class="small muted" style="margin-top:6px">A team leader of this unit presses ⚖️ Allocate to share them out.</div>'}</div>`;
 }
 document.addEventListener('click', async (e) => {
@@ -1530,6 +1530,25 @@ document.addEventListener('click', async (e) => {
     toast(`${r.allocated} allocated${r.given < r.allocated ? ` – ${r.allocated - r.given} waiting (team leaders full)` : ''}`);
     render();
   } catch (ex) { toast(ex.message, true); }
+});
+// ✎ Correct a wrong model no. (painting lines and machines arrived from painting)
+function modelFixForm(title, model, max, post, reload) {
+  return async () => {
+    const models = await loadMachineList();
+    openModal(`<h2>✎ ${title}</h2><div class="muted">Wrong model: <b>${esc(model)}</b> (${max})</div>
+      <label>Correct model no. *</label><input name="newModel" list="asm-models-mf" required placeholder="type and pick from the list">
+      <datalist id="asm-models-mf">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="${esc(max)}" required>
+      <p class="small muted">Only models with an assembly incentive rate can be chosen.</p>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => { const r = await post({ newModel: fd.get('newModel'), qty: fd.get('qty') }); toast(`${r.changed} changed to ${r.model}`); reload(); });
+  };
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-arrived-fix]');
+  if (!b) return;
+  const [url, unitId, max] = b.dataset.arrivedFix.split('|');
+  modelFixForm('Correct model no. (arrived from painting)', b.dataset.model, max, (body) => api(url, { method: 'POST', body: { ...body, unitId, model: b.dataset.model } }), render)();
 });
 const ASM_STATUS = { waiting: ['warn', '⏳ Unallocated – team leaders full'], assigned: ['w4', 'Given'], started: ['w3', '🔧 Assembling'], done: ['ok', '✓ Assembled'] };
 const monthNow = () => (state.today || new Date().toISOString().slice(0, 10)).slice(0, 7);
@@ -2631,9 +2650,9 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
 function paintingHtml(v) {
   const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)}${e.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>` : ''}${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : ''}</span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
   return `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span></div>
-      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span><button class="small" id="paint-add">+ Machine in (not from fab)</button></div>
-      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
     ${v.history.length ? `<div class="card section"><h2>Painting in / out (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th></th><th>Model no.</th><th class="num">Qty</th><th>By</th><th></th></tr></thead><tbody>
       ${v.history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${h.kind === 'in' ? '⬇ In' : '⬆ Out'}</td><td>${esc(h.model)}${(h.items || []).length ? `<div class="small muted">${h.items.map((x) => `${esc(x.how)}${x.when ? ' · ' + esc(fmtTime(x.when + ':00Z')) : ''}${x.qty > 1 ? ' × ' + x.qty : ''}`).join('<br>')}</div>` : ''}</td><td class="num"><b>${h.qty}</b></td><td class="small">${esc(h.by)}</td><td class="small muted">${esc(h.note)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
 }
@@ -2654,6 +2673,10 @@ function bindPainting(root, v, reload) {
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬆ Out</button></div>`,
     async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); toast('Sent to assembly'); reload(); });
   }));
+  root.querySelectorAll('[data-paint-fix]').forEach((b) => {
+    const [status, model, max] = b.dataset.paintFix.split('|');
+    b.onclick = modelFixForm('Correct model no. (painting)', model, max, (body) => api('/painting/correct', { method: 'POST', body: { ...body, status, model } }), reload);
+  });
   const add = root.querySelector('#paint-add');
   if (add) add.onclick = async () => {
     const models = await loadMachineList();
