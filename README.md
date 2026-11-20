@@ -128,3 +128,4 @@ Code layout: `server.js` (web server and API), `lib/scheduler.js` (allocation), 
 - **Bending ⇄ Move to another unit** – the Move list also shows bending leaders of other units (marked 🏢 unit – name); moving there puts the machines in that unit (and its fab after Bending done).
 - **Painting quantity (admin only)** – *In painting (Ready at Well Worth)* and *Coming from fab* lines have **✎ Qty / cancel** for the admin: lower the quantity to cancel wrong machines (reason compulsory), or raise it to add missing ones (in painting, with vendor). Cancellations show in the painting history.
 - **No direct painting entry** – the + Machine in (not from fab) button is removed; machines come into painting only from Fab (the admin can still add missing ones with ✎ Qty).
+- **Painting Copy / WhatsApp** – *Coming from fab* and *In painting (Ready at Well Worth)* have 📋 Copy and 📤 WhatsApp: one line per model with quantity and vendor(s), and a total.
