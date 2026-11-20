@@ -82,6 +82,7 @@ function changed() {
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '30mb' })); // room for a few photos
+app.use((req, res, next) => { if (!req.body) req.body = {}; next(); }); // Express 5: no body → undefined
 // Always check for a newer page after an update (no stale app.js / style.css in phones).
 app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
