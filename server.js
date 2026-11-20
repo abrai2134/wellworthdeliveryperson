@@ -2715,7 +2715,8 @@ const paintOk = (req, res, next) => (req.user && ['painting', 'admin'].includes(
 const paintCreator = (req) => (req.user.role === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'painting', id: req.user.id });
 app.get('/api/painting/home', paintOk, (req, res) => res.json(paintingView()));
 app.post('/api/painting/in', paintOk, (req, res) => send(res, paintIn(req.body, painterName(req))));
-app.post('/api/painting/add', paintOk, (req, res) => send(res, paintAdd(req.body, painterName(req))));
+// machines come into painting only from fab (the admin can add missing ones with ✎ Qty)
+app.post('/api/painting/add', paintOk, (req, res) => bad(res, 'Machines come into painting only from fab'));
 app.post('/api/painting/out', paintOk, (req, res) => send(res, paintOut(req.body, painterName(req), paintCreator(req))));
 
 // Fab team leader / fab helper (staff login)
