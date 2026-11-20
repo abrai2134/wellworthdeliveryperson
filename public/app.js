@@ -2516,6 +2516,14 @@ function fabRow(m, who, kind = 'fab') {
 }
 // Compact fab list: one card per fab leader; machines of the same model + status in one line "× N"
 // with buttons for several at once; tap the line to see each machine.
+// WhatsApp text for a list of fab / bending machines: one line per model with qty and status
+function fabShareText(title, items, kind) {
+  const L = STG[kind];
+  const g = {};
+  for (const m of items) { const st = m.status === 'started' ? L.inWork : m.status === 'waiting' ? 'Waiting' : 'Not started'; const k = m.model + '|' + st; (g[k] ||= { model: m.model, st, n: 0 }).n++; }
+  const lines = Object.values(g).sort((a, b) => a.model.localeCompare(b.model)).map((x) => `• ${x.model} × ${x.n} – ${x.st}`);
+  return `${L.icon} *${title}* (${fmtDate(state.today || new Date().toISOString().slice(0, 10))})\n${lines.join('\n')}\nTotal: ${items.length}`;
+}
 function fabGrouped(items, who, kind = 'fab') {
   const L = STG[kind];
   const groups = {};
@@ -2528,7 +2536,7 @@ function fabGrouped(items, who, kind = 'fab') {
     const clusters = {};
     for (const m of g) (clusters[[m.status, m.model, m.byCompany ? 'co' + (m.companyLeader || '') + '|' + (m.companyWorker || '') : ''].join('|')] ||= []).push(m);
     const order = { started: 0, assigned: 1, waiting: 2, done: 3 };
-    return `<div class="done-list asm-group"><div class="dl-head row"><span><b>${L.icon} ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${inFab ? ` · ${inFab} ${L.inWork.toLowerCase()}` : ''}</span></span></div>
+    return `<div class="done-list asm-group"><div class="dl-head row"><span><b>${L.icon} ${esc(n)}</b> <span class="muted">· ${g.length} machine${g.length > 1 ? 's' : ''}${inFab ? ` · ${inFab} ${L.inWork.toLowerCase()}` : ''}</span></span><div class="spacer"></div>${shareButtons(fabShareText(`${L.Name} – ${n}`, g, kind))}</div>
       ${Object.values(clusters).sort((a, b) => order[a[0].status] - order[b[0].status] || a[0].model.localeCompare(b[0].model)).map((c) => fabCluster(c, who, kind)).join('')}</div>`;
   }).join('');
 }
@@ -2564,7 +2572,8 @@ function fabSummaryHtml(items, moveUrl, kind = 'fab') {
   const names = Object.keys(g).sort();
   if (!names.length) return '';
   const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">${r.leaderId ? '⇄ Move' : '👷 Give to ' + L.leader}</button>` : ''}${moveUrl.startsWith('/admin') ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
-  return `<div class="card section"><h3 style="margin-top:0">📦 ${L.Name} – given to each ${L.leader}</h3><div class="table-wrap"><table><thead><tr><th>${L.Leader}</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">${L.inWork}</th>${moveUrl ? '<th></th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
+  const allText = names.map((n) => fabShareText(`${L.Name} – ${n}`, items.filter((m) => ((m.unitName ? m.unitName + ' – ' : '') + (m.leader ? m.leader.name : '⏳ Waiting')) === n), kind)).join('\n\n');
+  return `<div class="card section"><div class="row"><h3 style="margin:0">📦 ${L.Name} – given to each ${L.leader}</h3><div class="spacer"></div>${shareButtons(allText)}</div><div style="margin-top:8px"></div><div class="table-wrap"><table><thead><tr><th>${L.Leader}</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">${L.inWork}</th>${moveUrl ? '<th></th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
 }
 function fabAddForm(url, reload, units, myUnit, kind = 'fab') {
   const L = STG[kind];
