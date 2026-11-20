@@ -2760,9 +2760,11 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-fab-move]');
   if (!b) return;
   const [url, fromId, unitId, max] = b.dataset.fabMove.split('|');
-  const leaders = (((state.leadersByKind || {})[b.dataset.kind || 'fab']) || state.fabLeaders || []).filter((l) => l.id !== fromId && (!unitId || !l.unitId || l.unitId === unitId));
+  const otherUnits = b.dataset.kind === 'bend'; // bending machines may move to another unit's bending leader
+  const leaders = (((state.leadersByKind || {})[b.dataset.kind || 'fab']) || state.fabLeaders || []).filter((l) => l.id !== fromId && (otherUnits || !unitId || !l.unitId || l.unitId === unitId))
+    .sort((x, y) => (x.unitId === unitId ? 0 : 1) - (y.unitId === unitId ? 0 : 1) || (x.unitName || '').localeCompare(y.unitName || '') || x.name.localeCompare(y.name));
   openModal(`<h2>⇄ Move ${(STG[b.dataset.kind] || STG.fab).name} machines</h2><div class="muted">${esc(b.dataset.model)} · from <b>${esc(b.dataset.name)}</b> (${max} not started)</div>
-    <label>Move to ${(STG[b.dataset.kind] || STG.fab).leader} *</label><select name="toLeaderId" required><option value="">— choose —</option>${(b.dataset.kind || 'fab') === 'fab' ? '<option value="__bend">🔩 Back to Bending (leaves fab)</option>' : ''}${leaders.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}${l.pending !== undefined ? ` (${l.pending} pending)` : ''}</option>`).join('')}</select>
+    <label>Move to ${(STG[b.dataset.kind] || STG.fab).leader} *</label><select name="toLeaderId" required><option value="">— choose —</option>${(b.dataset.kind || 'fab') === 'fab' ? '<option value="__bend">🔩 Back to Bending (leaves fab)</option>' : ''}${leaders.map((l) => `<option value="${esc(l.id)}">${otherUnits && l.unitId !== unitId ? `🏢 ${esc(l.unitName || '')} – ` : ''}${esc(l.name)}${l.pending !== undefined ? ` (${l.pending} pending)` : ''}</option>`).join('')}</select>
     <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="1" required>
     <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⇄ Move</button></div>`,
   async (fd) => {
@@ -2864,6 +2866,7 @@ async function renderBendStaff() {
   const r = await api('/staff/bend' + (state.bendMonth ? '?month=' + state.bendMonth : ''));
   if (r.isCompany) return renderBendCompany(r);
   state.fabLeaders = r.unitLeaders;
+  state.leadersByKind = { ...(state.leadersByKind || {}), bend: r.allLeaders || r.unitLeaders };
   state.bendWorkers = r.workers || [];
   const who = r.isManager ? 'manager' : 'fableader'; // bending admin: Start / Done and give to leaders
   const wrap = $app.querySelector('.wrap');

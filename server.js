@@ -2395,12 +2395,12 @@ function bendMove(body, by, unitId) {
   const model = str(body.model, 120);
   const toP = db().people.find((p) => p.id === to && p.role === 'bendleader' && p.active && !p.deleted);
   if (!toP || to === from) return { error: 'Choose the bending leader to move them to' };
+  // a bending leader of another unit may be chosen: the machines then belong to that unit
   const list = db().bend.filter((m) => (from ? m.leaderId === from && m.status === 'assigned' : !m.leaderId && m.status === 'waiting') && m.model === model && (!unitId || m.unitId === unitId));
   if (!list.length) return { error: 'No machine of this model is waiting to start with that bending leader' };
-  if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a bending leader of the same unit' };
   const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
   const at = new Date().toISOString();
-  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId }, to: { leaderId: to } }); m.leaderId = to; m.status = 'assigned'; m.assignedAt = at; m.manual = true; }
+  for (const m of list.slice(0, qty)) { (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId, unitId: m.unitId }, to: { leaderId: to, unitId: toP.unitId } }); m.leaderId = to; if (toP.unitId) m.unitId = toP.unitId; m.status = 'assigned'; m.assignedAt = at; m.manual = true; }
   store.save();
   return { value: { id: '', moved: qty } };
 }
@@ -2442,6 +2442,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
     items: db().bend.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(bendView),
     unitLeaders: bendPeople(p.unitId, 'bendleader'),
+    allLeaders: bendPeople(null, 'bendleader'), // ⇄ Move can go to another unit's bending leader
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
