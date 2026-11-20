@@ -2555,6 +2555,7 @@ function paintingView() {
   const hist = [];
   for (const x of P) {
     if (x.inAt && x.inAt >= since) hist.push({ at: x.inAt, kind: 'in', model: x.model, by: x.inBy || '', note: (x.fromFab ? 'from fab' : 'added directly') + (x.vendor ? ' · vendor ' + x.vendor : '') });
+    if (x.status === 'cancelled' && (x.cancelledAt || '') >= since) hist.push({ at: x.cancelledAt, kind: 'cancel', model: x.model, by: x.cancelledBy || '', note: '✕ cancelled – ' + (x.cancelReason || '') });
     if (x.outAt && x.outAt >= since) hist.push({ at: x.outAt, kind: 'out', model: x.model, by: x.outBy || '', note: 'to ' + unitName(x.toUnitId) + ' assembly' });
   }
   const g = {};
@@ -2979,6 +2980,38 @@ admin.put('/fab/settings', (req, res) => {
   res.json({ ok: true });
 });
 // Painting logins (admin)
+// Admin: correct the quantity on a painting line – cancel wrong machines or add missing ones.
+admin.post('/painting/qty', (req, res) => {
+  const status = req.body.status === 'coming' ? 'coming' : 'in';
+  const model = str(req.body.model, 120);
+  const reason = str(req.body.reason, 150);
+  if (!reason) return bad(res, 'Write the reason');
+  const want = parseInt(req.body.qty, 10);
+  if (!(want >= 0 && want <= 999)) return bad(res, 'Enter the correct quantity');
+  const list = db().painting.filter((x) => x.status === status && x.model === model)
+    .sort((a, b) => (b.inAt || b.createdAt || '').localeCompare(a.inAt || a.createdAt || '')); // newest first
+  const at = new Date().toISOString();
+  if (want < list.length) {
+    const n = list.length - want;
+    for (const x of list.slice(0, n)) {
+      x.status = 'cancelled'; x.cancelledAt = at; x.cancelledBy = 'admin'; x.cancelReason = reason; x.cancelledFrom = status;
+      if (x.fabId) { const f = db().fab.find((m) => m.id === x.fabId); if (f) (f.edits = f.edits || []).push({ at, by: 'admin', note: 'cancelled in painting – ' + reason }); }
+    }
+    store.save();
+    return res.json({ ok: true, cancelled: n });
+  }
+  if (want > list.length) {
+    if (status !== 'in') return bad(res, 'Machines coming from fab can only be reduced');
+    { const miss = rateMissing(model); if (miss) return bad(res, miss); }
+    const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
+    if (!vendor) return bad(res, 'Choose the vendor for the added machines');
+    const n = want - list.length;
+    for (let i = 0; i < n; i++) db().painting.push({ id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', note: reason, vendor });
+    store.save();
+    return res.json({ ok: true, added: n });
+  }
+  res.json({ ok: true });
+});
 admin.put('/painting/vendors', (req, res) => {
   const list = [...new Map((Array.isArray(req.body.vendors) ? req.body.vendors : []).map((v) => str(v, 60)).filter(Boolean).map((v) => [v.toUpperCase(), v])).values()].slice(0, 50);
   if (!list.length) return bad(res, 'Keep at least one painting vendor');
