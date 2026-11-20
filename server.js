@@ -2027,7 +2027,8 @@ function addOldStock(body, by, role, creator) {
   store.save();
   return { value: { id: '', count: qty } };
 }
-app.post('/api/dispatch/stock', need('dispatch'), (req, res) => send(res, addOldStock(req.body, req.user.account.name, 'dispatch')));
+// old stock is entered by team leaders (own login) or the admin – not from the Dispatch login
+app.post('/api/dispatch/stock', need('dispatch'), (req, res) => bad(res, 'Old stock is added by a team leader from their own login, or by the admin'));
 // Correct the model no. of machines in a godown (typing mistakes). Only the login that made the
 // entry can correct it (the admin can correct everything).
 app.post('/api/godown/edit-model', (req, res) => {
@@ -2117,7 +2118,7 @@ app.post('/api/godown/booking', (req, res) => {
 });
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
-unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the Dispatch login)'));
+unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the admin)'));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
