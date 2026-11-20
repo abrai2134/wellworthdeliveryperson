@@ -131,7 +131,7 @@ const norm = (v) => str(v).toLowerCase();
 
 // ---------- public ----------
 app.get('/api/public', (req, res) => {
-  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION, units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })) });
+  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION, paintVendors: paintVendors(), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })) });
 });
 
 // Public machine search (no login): where a model is – per unit, how many in fab, painting,
@@ -2231,8 +2231,12 @@ function fabStart(m, by) {
   return { value: m };
 }
 // Fab done → the machine is waiting to come into Painting.
+// painting vendors chosen at Fab done (the admin keeps the list)
+function paintVendors() { const v = db().settings.paintVendors; return Array.isArray(v) ? v : ['Tayyab', 'JK', 'Hind']; }
 function fabDone(m, body, by) {
   if (!FAB.PENDING.includes(m.status)) return { error: 'This machine is not in fab' };
+  const vendor = paintVendors().find((v) => v.toUpperCase() === str(body.vendor, 80).toUpperCase());
+  if (!vendor) return { error: 'Choose the painting vendor' };
   const t = asmTimes(m, body, true);
   if (t.error) return t;
   m.status = 'done'; m.startedAt = t.value.started; m.completedAt = t.value.completed; m.doneBy = by;
@@ -2243,7 +2247,8 @@ function fabDone(m, body, by) {
     m.contractorAmount = leader && leader.payType === 'contractor' ? rate : 0;
   }
   if (body.startedAt || body.completedAt) m.timesEditedBy = by;
-  db().painting.push({ id: newId('pnt'), fabId: m.id, unitId: m.unitId || null, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt });
+  m.paintVendor = vendor;
+  db().painting.push({ id: newId('pnt'), fabId: m.id, unitId: m.unitId || null, model: m.model, status: 'coming', fromFab: true, createdAt: m.completedAt, vendor });
   fabAssign();
   store.save();
   return { value: m };
@@ -2535,7 +2540,7 @@ function paintingView() {
   // where each machine came from, when, and who made the entry
   const entry = (x) => {
     const f = x.fabId ? db().fab.find((m) => m.id === x.fabId) : null;
-    const fromFab = f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '';
+    const fromFab = (f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '') + (x.vendor ? ` · 🎨 vendor ${x.vendor}` : '');
     if (x.status === 'coming') return { text: `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
     return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
   };
@@ -2548,7 +2553,7 @@ function paintingView() {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   const hist = [];
   for (const x of P) {
-    if (x.inAt && x.inAt >= since) hist.push({ at: x.inAt, kind: 'in', model: x.model, by: x.inBy || '', note: x.fromFab ? 'from fab' : 'added directly' });
+    if (x.inAt && x.inAt >= since) hist.push({ at: x.inAt, kind: 'in', model: x.model, by: x.inBy || '', note: (x.fromFab ? 'from fab' : 'added directly') + (x.vendor ? ' · vendor ' + x.vendor : '') });
     if (x.outAt && x.outAt >= since) hist.push({ at: x.outAt, kind: 'out', model: x.model, by: x.outBy || '', note: 'to ' + unitName(x.toUnitId) + ' assembly' });
   }
   const g = {};
@@ -2947,6 +2952,13 @@ admin.put('/fab/settings', (req, res) => {
   res.json({ ok: true });
 });
 // Painting logins (admin)
+admin.put('/painting/vendors', (req, res) => {
+  const list = [...new Map((Array.isArray(req.body.vendors) ? req.body.vendors : []).map((v) => str(v, 60)).filter(Boolean).map((v) => [v.toUpperCase(), v])).values()].slice(0, 50);
+  if (!list.length) return bad(res, 'Keep at least one painting vendor');
+  db().settings.paintVendors = list;
+  store.save();
+  res.json({ ok: true });
+});
 admin.post('/painters', (req, res) => {
   const name = str(req.body.name, 80);
   const username = norm(req.body.username);

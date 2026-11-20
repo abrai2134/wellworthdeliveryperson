@@ -2613,12 +2613,14 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
     const m = find(ids[0]);
     openModal(`<h2>✓ ${L.done}</h2><div class="muted">⚙️ ${esc(b.dataset.model)} · ${ids.length} machine${ids.length > 1 ? 's' : ''}</div>
       ${ids.length > 1 ? `<label>How many are done? *</label><input name="qty" type="number" min="1" max="${ids.length}" value="${ids.length}" required>` : ''}
+      ${kind === 'fab' ? `<label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(state.pub.paintVendors || []).map((v) => `<option>${esc(v)}</option>`).join('')}</select>` : ''}
       ${asmTimesForm(m, new Date().toISOString())}
       <p class="small muted">They then go to ${L.next}.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ ${L.done}</button></div>`,
     async (fd) => {
       const n = Math.max(1, Math.min(ids.length, Number(fd.get('qty')) || 1));
-      const times = asmTimesValue();
+      if (kind === 'fab' && !fd.get('vendor')) throw new Error('Choose the painting vendor');
+      const times = { ...asmTimesValue(), vendor: fd.get('vendor') || '' };
       for (const id of ids.slice(0, n)) await api(`${base}/${id}/done`, { method: 'POST', body: times });
       toast(`${n} ${L.done.toLowerCase()} – sent to ${L.next.toLowerCase()}`);
       reload();
@@ -2627,10 +2629,10 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
   root.querySelectorAll('[data-fab-start]').forEach((b) => (b.onclick = async () => { try { await api(`${base}/${b.dataset.fabStart}/start`, { method: 'POST' }); toast('Started'); reload(); } catch (ex) { toast(ex.message, true); } }));
   root.querySelectorAll('[data-fab-done]').forEach((b) => (b.onclick = () => {
     const m = find(b.dataset.fabDone);
-    openModal(`<h2>✓ ${L.done}</h2><div class="muted">⚙️ ${esc(m.model)}</div>${asmTimesForm(m, new Date().toISOString())}
+    openModal(`<h2>✓ ${L.done}</h2><div class="muted">⚙️ ${esc(m.model)}</div>${kind === 'fab' ? `<label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(state.pub.paintVendors || []).map((v) => `<option>${esc(v)}</option>`).join('')}</select>` : ''}${asmTimesForm(m, new Date().toISOString())}
       <p class="small muted">The machine then goes to ${L.next}.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">✓ ${L.done}</button></div>`,
-    async () => { await api(`${base}/${m.id}/done`, { method: 'POST', body: asmTimesValue() }); toast(`${L.done} – sent to ${L.next.toLowerCase()}`); reload(); });
+    async (fd) => { if (kind === 'fab' && !fd.get('vendor')) throw new Error('Choose the painting vendor'); await api(`${base}/${m.id}/done`, { method: 'POST', body: { ...asmTimesValue(), vendor: fd.get('vendor') || '' } }); toast(`${L.done} – sent to ${L.next.toLowerCase()}`); reload(); });
   }));
   root.querySelectorAll('[data-fab-cancel]').forEach((b) => (b.onclick = async () => {
     const reason = prompt('Why is this machine cancelled?');
@@ -2945,6 +2947,9 @@ async function adminFab(main) {
     <form class="card section" id="fab-rates">${fabRatesFormHtml(await loadMachineList())}</form>
     <h1 style="margin:24px 0 0">🎨 Painting</h1>
     <div id="adm-paint">${paintingHtml(r.painting)}</div>
+    <div class="card section"><h2 style="margin:0">🎨 Painting vendors</h2><div class="small muted">Chosen when a machine is marked ✓ Fab done.</div>
+      <div style="margin:8px 0">${(state.pub.paintVendors || []).map((v, i) => `<span class="badge" style="margin:2px">${esc(v)} <button class="link danger small" data-pv-del="${i}">✕</button></span>`).join('')}</div>
+      <form id="pv-add" class="row" style="gap:6px"><input name="name" placeholder="Vendor name" required style="flex:1"><button class="primary small">+ Add</button></form></div>
     <div class="card section"><div class="row"><h2 style="margin:0">🎨 Painting logins</h2><div class="spacer"></div><button class="primary small" id="pnt-add">+ Add painting login</button></div>
       <div class="small muted">They log in with the 🎨 Painting button and press ⬇ In / ⬆ Out.</div>
       ${r.painters.map((d) => `<div style="margin-top:6px"><b>${esc(d.name)}</b> <code>${esc(d.username)}</code>${d.active ? '' : ' <span class="badge">inactive</span>'}<div class="row small"><button class="link small" data-pnt-pass="${esc(d.id)}">Change password</button><button class="link small" data-pnt-act="${esc(d.id)}|${d.active ? '' : '1'}">${d.active ? 'Make inactive' : 'Make active'}</button><button class="link small danger" data-pnt-del="${esc(d.id)}">Remove</button></div></div>`).join('') || '<p class="muted small">No painting login yet.</p>'}</div></div>`;
@@ -2964,6 +2969,9 @@ async function adminFab(main) {
       <label>Name *</label><input name="name" required><label>Login ID *</label><input name="username" required placeholder="e.g. paint1"><label>Password *</label><input name="password" required minlength="4">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
     async (fd) => { await api('/admin/painters', { method: 'POST', body: Object.fromEntries(fd) }); toast('Painting login added'); reload(); });
+  const savePv = async (list) => { try { await api('/admin/painting/vendors', { method: 'PUT', body: { vendors: list } }); state.pub.paintVendors = list; toast('Saved'); reload(); } catch (ex) { toast(ex.message, true); } };
+  document.getElementById('pv-add').onsubmit = (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) savePv([...(state.pub.paintVendors || []), n]); };
+  main.querySelectorAll('[data-pv-del]').forEach((b) => (b.onclick = () => { if (confirm('Remove this vendor from the list?')) savePv((state.pub.paintVendors || []).filter((_, i) => i !== +b.dataset.pvDel)); }));
   main.querySelectorAll('[data-pnt-pass]').forEach((b) => (b.onclick = async () => { const pw = prompt('New password (min 4)'); if (!pw) return; try { await api('/admin/painters/' + b.dataset.pntPass, { method: 'PUT', body: { password: pw } }); toast('Password changed'); } catch (ex) { toast(ex.message, true); } }));
   main.querySelectorAll('[data-pnt-act]').forEach((b) => (b.onclick = async () => { const [id, on] = b.dataset.pntAct.split('|'); await api('/admin/painters/' + id, { method: 'PUT', body: { active: !!on } }); reload(); }));
   main.querySelectorAll('[data-pnt-del]').forEach((b) => (b.onclick = async () => { if (!confirm('Remove this painting login?')) return; await api('/admin/painters/' + b.dataset.pntDel, { method: 'DELETE' }); reload(); }));
