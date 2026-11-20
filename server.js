@@ -130,7 +130,7 @@ const norm = (v) => str(v).toLowerCase();
 
 // ---------- public ----------
 app.get('/api/public', (req, res) => {
-  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION });
+  res.json({ orgName: db().settings.orgName, sessions: S.SESSIONS, maxHelpers: S.MAX_HELPERS, version: VERSION, units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })) });
 });
 
 // Public machine search (no login): where a model is – per unit, how many in fab, painting,
@@ -290,6 +290,8 @@ function deliveryView(d) {
     notes: d.notes || '',
     helpersNeeded: d.helpersNeeded,
     installation: !!d.installation,
+    onlyUnits: d.onlyUnits || [],
+    onlyUnitNames: (d.onlyUnits || []).map(unitName).filter(Boolean),
     status: d.status,
     createdBy: d.createdBy || '',
     team,
@@ -344,6 +346,8 @@ function readDelivery(body, unitId, opts = {}) {
       session,
       helpersNeeded,
       installation,
+      // helpers only from these units (empty = any unit)
+      onlyUnits: isLoad ? [] : [...new Set((Array.isArray(body.onlyUnits) ? body.onlyUnits : body.onlyUnits ? [body.onlyUnits] : []).map((x) => str(x)).filter((id) => liveUnit(id)))],
       customer: str(body.customer, 120),
       customerPhone: str(body.customerPhone, 30),
       address: str(body.address, 300),

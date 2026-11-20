@@ -56,7 +56,7 @@ function needText(d) {
   if (d.type === 'loading') return `${d.helpersNeeded} person${d.helpersNeeded > 1 ? 's' : ''} for loading / unloading`;
   const parts = [];
   if (d.installation) parts.push(d.type === 'service' ? 'service person' : 'installation person');
-  if (d.helpersNeeded) parts.push(`${d.helpersNeeded} helper${d.helpersNeeded > 1 ? 's' : ''}`);
+  if (d.helpersNeeded) parts.push(`${d.helpersNeeded} helper${d.helpersNeeded > 1 ? 's' : ''}${(d.onlyUnitNames || []).length ? ` (only from ${d.onlyUnitNames.join(', ')})` : ''}`);
   return parts.join(' + ');
 }
 function placeName(t, d) {
@@ -677,6 +677,8 @@ function deliveryForm(base, d, reload, presetDate, preset) {
       <div><label id="f-help-l">Helpers needed *</label><select name="helpersNeeded" id="f-help">${helperOptions(v.helpersNeeded)}</select></div>
       <div id="f-inst-wrap"><label id="f-inst-l">Installation person needed?</label><select name="installation"><option value="no">No</option><option value="yes" ${v.installation ? 'selected' : ''}>Yes</option></select></div>
     </div>
+    <div id="f-only-wrap" style="margin-top:6px"><label>👥 Helpers only from these units <span class="muted small" style="font-weight:400">– optional; leave all unticked for any unit</span></label>
+      <div class="row" style="gap:4px 14px;flex-wrap:wrap">${(isAdmin ? A().units.filter((u) => u.active) : state.pub.units || []).map((u) => `<label class="check" style="margin:0"><input type="checkbox" name="onlyUnits" value="${esc(u.id)}" ${(v.onlyUnits || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>
     <div id="f-entry-wrap"><label>✍️ Entry by * <span class="muted small" style="font-weight:400">– who is raising this request</span></label><select name="entryBy" id="f-entry"><option value="">Loading names…</option></select></div>
     <div id="f-cust-block">
     <div class="lookup" style="margin-top:6px"><label>👤 Party name</label><input name="customer" id="f-cust" autocomplete="off" value="${esc(v.customer)}" placeholder="type party name to search">
@@ -699,6 +701,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
   async (fd) => {
     const body = Object.fromEntries(fd);
     body.items = readItems();
+    body.onlyUnits = fd.getAll('onlyUnits');
     if (body.type === 'loading') { body.items = []; body.customer = ''; body.customerPhone = ''; body.address = ''; body.installation = 'no'; }
     if (!String(body.entryBy || '').trim()) throw new Error('Choose your name in "Entry by"');
     if (d) await api(`${base}/deliveries/${d.id}`, { method: 'PUT', body });
@@ -780,6 +783,7 @@ function deliveryForm(base, d, reload, presetDate, preset) {
     const svc = type.value === 'service';
     const load = type.value === 'loading';
     document.getElementById('f-inst-wrap').hidden = load;
+    document.getElementById('f-only-wrap').hidden = load;
     document.getElementById('f-cust-block').hidden = load;
     document.getElementById('f-load-note').hidden = !load;
     modalBody.querySelector('.more-details').hidden = load;
