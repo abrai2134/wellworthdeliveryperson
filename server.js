@@ -1448,11 +1448,13 @@ const myMachine = (req) => (m) => m.leaderId === req.user.id;
 // Team leader enters new machines for assembly and old stock for their unit's godown.
 app.post('/api/staff/assembly/machines', need('staff'), (req, res) => {
   const p = req.user.account;
+  if (p.role === 'leader') return bad(res, 'Machines and stock are entered by the admin – not from the team leader login');
   if (p.role !== 'leader') return bad(res, 'Only team leaders can enter machines');
   send(res, addMachines(p.unitId, req.body, p.name, { role: 'staff', id: p.id }));
 });
 app.post('/api/staff/assembly/stock', need('staff'), (req, res) => {
   const p = req.user.account;
+  if (p.role === 'leader') return bad(res, 'Machines and stock are entered by the admin – not from the team leader login');
   if (p.role !== 'leader') return bad(res, 'Only team leaders can add stock');
   send(res, addOldStock({ ...req.body, unitId: p.unitId, kind: 'godown', party: '' }, p.name, 'staff', { role: 'staff', id: p.id }));
 });
@@ -1519,6 +1521,7 @@ app.post('/api/staff/assembly/:id/divert', need('staff'), (req, res) => {
 
 // Team leader adds an old machine that was missed out; counted after the admin approves.
 app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
+  return bad(res, 'Machines and stock are entered by the admin – not from the team leader login');
   // Team leader adds an old machine that was missed out – added straight away (no approval).
   // Completed: end date-time, sticker photo and godown / dispatched are compulsory.
   // Still assembling: only the start; it shows in their list to finish later.
@@ -1566,6 +1569,7 @@ app.post('/api/staff/assembly/old', need('staff'), (req, res) => {
 
 app.post('/api/staff/assembly/request', need('staff'), (req, res) => {
   const p = req.user.account;
+  if (p.role === 'leader') return bad(res, 'Machines and stock are entered by the admin – not from the team leader login');
   if (p.role !== 'leader') return bad(res, 'Only team leaders can request machines');
   const model = canonModel(req.body.model);
   const qty = parseInt(req.body.qty, 10);
@@ -2028,7 +2032,7 @@ function addOldStock(body, by, role, creator) {
   return { value: { id: '', count: qty } };
 }
 // old stock is entered by team leaders (own login) or the admin – not from the Dispatch login
-app.post('/api/dispatch/stock', need('dispatch'), (req, res) => bad(res, 'Old stock is added by a team leader from their own login, or by the admin'));
+app.post('/api/dispatch/stock', need('dispatch'), (req, res) => bad(res, 'Old stock is added by the admin'));
 // Correct the model no. of machines in a godown (typing mistakes). Only the login that made the
 // entry can correct it (the admin can correct everything).
 app.post('/api/godown/edit-model', (req, res) => {
@@ -2118,7 +2122,7 @@ app.post('/api/godown/booking', (req, res) => {
 });
 admin.post('/godown/stock', (req, res) => send(res, addOldStock(req.body, 'admin', 'admin')));
 // A unit adds old stock to its own godown only.
-unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by a team leader from their own login (or the admin)'));
+unit.post('/assembly/old-stock', (req, res) => bad(res, 'Stock is added by the admin'));
 
 // Dispatch logins (admin)
 admin.post('/dispatchers', (req, res) => {
