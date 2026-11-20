@@ -2662,10 +2662,14 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
 // Painting: ⬇ In (from fab, or added directly) and ⬆ Out (to a unit's assembly).
 function paintingHtml(v) {
   const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)}${e.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>` : ''}${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : ''}</span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
-  return `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span></div>
-      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
+  const vendorCard = (v.byVendor || []).length ? `<div class="card section"><div class="row"><h2 style="margin:0">🎨 Vendor-wise</h2><div class="spacer"></div>${shareButtons(v.byVendor.map((g) => `🎨 *${g.vendor || 'Vendor not entered'}*\n` + g.models.map((m) => `• ${m.model} × ${m.coming + m.in}${m.coming ? ` (${m.coming} coming from fab)` : ''}`).join('\n')).join('\n\n'))}</div>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Vendor</th><th>Model no.</th><th class="num">Coming from fab</th><th class="num">In painting</th></tr></thead><tbody>
+    ${v.byVendor.map((g) => g.models.map((m, i) => `<tr>${i === 0 ? `<td rowspan="${g.models.length}"><b>${g.vendor ? esc(g.vendor) : '<span class="muted">not entered</span>'}</b><div class="small muted">${((n) => `${n} machine${n === 1 ? '' : 's'}`)(g.models.reduce((t, x) => t + x.coming + x.in, 0))}</div></td>` : ''}<td>${esc(m.model)}</td><td class="num">${m.coming || ''}</td><td class="num">${m.in || ''}</td></tr>`).join('')).join('')}
+    </tbody></table></div>${v.byVendor.some((g) => !g.vendor) ? '<div class="small muted" style="margin-top:4px">For machines with no vendor, press 🎨 Vendor on the line below.</div>' : ''}</div>` : '';
+  return vendorCard + `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span></div>
+      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="coming|${esc(x.model)}|${x.qty}">🎨 Vendor</button>`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span><button class="small" id="paint-add">+ Machine in (not from fab)</button></div>
-      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="in|${esc(x.model)}|${x.qty}">🎨 Vendor</button>`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
     ${v.history.length ? `<div class="card section"><h2>Painting in / out (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th></th><th>Model no.</th><th class="num">Qty</th><th>By</th><th></th></tr></thead><tbody>
       ${v.history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${h.kind === 'in' ? '⬇ In' : '⬆ Out'}</td><td>${esc(h.model)}${(h.items || []).length ? `<div class="small muted">${h.items.map((x) => `${esc(x.how)}${x.when ? ' · ' + esc(fmtTime(x.when + ':00Z')) : ''}${x.qty > 1 ? ' × ' + x.qty : ''}`).join('<br>')}</div>` : ''}</td><td class="num"><b>${h.qty}</b></td><td class="small">${esc(h.by)}</td><td class="small muted">${esc(h.note)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
 }
@@ -2686,6 +2690,15 @@ function bindPainting(root, v, reload) {
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬆ Out</button></div>`,
     async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); toast('Sent to assembly'); reload(); });
   }));
+  root.querySelectorAll('[data-paint-vendor]').forEach((b) => (b.onclick = () => {
+    const [status, model, max] = b.dataset.paintVendor.split('|');
+    openModal(`<h2>🎨 Painting vendor</h2><div class="muted">⚙️ ${esc(model)} · ${max} machine${max > 1 ? 's' : ''}</div>
+      <label>Vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select>
+      <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="${esc(max)}" required>
+      <p class="small muted">Machines with no vendor are changed first.</p>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the vendor'); const r = await api('/painting/vendor', { method: 'POST', body: { status, model, vendor: fd.get('vendor'), qty: fd.get('qty') } }); toast(`${r.changed} set to ${fd.get('vendor')}`); reload(); });
+  }));
   root.querySelectorAll('[data-paint-fix]').forEach((b) => {
     const [status, model, max] = b.dataset.paintFix.split('|');
     b.onclick = modelFixForm('Correct model no. (painting)', model, max, (body) => api('/painting/correct', { method: 'POST', body: { ...body, status, model } }), reload);
@@ -2696,9 +2709,10 @@ function bindPainting(root, v, reload) {
     openModal(`<h2>⬇ Machine into painting (not from fab)</h2>
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-pt" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
       <datalist id="asm-models-pt">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      <label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select>
       <label>Note</label><input name="note" placeholder="optional">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬇ In</button></div>`,
-    async (fd) => { await api('/painting/add', { method: 'POST', body: Object.fromEntries(fd) }); toast('Added to painting'); reload(); });
+    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); await api('/painting/add', { method: 'POST', body: Object.fromEntries(fd) }); toast('Added to painting'); reload(); });
   };
 }
 async function renderPainting() {

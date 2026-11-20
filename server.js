@@ -2542,7 +2542,7 @@ function paintingView() {
     const f = x.fabId ? db().fab.find((m) => m.id === x.fabId) : null;
     const fromFab = (f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '') + (x.vendor ? ` · 🎨 vendor ${x.vendor}` : '');
     if (x.status === 'coming') return { text: `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
-    return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
+    return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
   };
   const group = (list) => Object.values(list.reduce((o, x) => {
     const gm = (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {}, entries: {} });
@@ -2558,7 +2558,18 @@ function paintingView() {
   }
   const g = {};
   for (const h of hist) { const k = [h.at.slice(0, 16), h.kind, h.model, h.by, h.note].join('|'); (g[k] ||= { ...h, qty: 0 }).qty++; }
+  // which vendor has which model (coming from fab + in painting)
+  const bv = {};
+  for (const x of P) {
+    if (x.status !== 'coming' && x.status !== 'in') continue;
+    const v = x.vendor || '';
+    const r = ((bv[v] ||= {})[x.model] ||= { model: x.model, coming: 0, in: 0 });
+    r[x.status === 'coming' ? 'coming' : 'in']++;
+  }
+  const byVendor = Object.keys(bv).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b))
+    .map((v) => ({ vendor: v, models: Object.values(bv[v]).sort((a, b) => a.model.localeCompare(b.model)) }));
   return {
+    byVendor, vendors: paintVendors(),
     coming: group(P.filter((x) => x.status === 'coming')),
     inPainting: group(P.filter((x) => x.status === 'in')),
     history: Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100),
@@ -2583,10 +2594,12 @@ function paintAdd(body, by) {
   const model = canonModel(body.model);
   if (!model) return { error: 'Enter the model no.' };
   { const miss = rateMissing(model); if (miss) return { error: miss }; } // only models with an assembly incentive rate
+  const vendor = paintVendors().find((v) => v.toUpperCase() === str(body.vendor, 80).toUpperCase());
+  if (!vendor) return { error: 'Choose the painting vendor' };
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const at = new Date().toISOString();
-  for (let i = 0; i < qty; i++) db().painting.push({ id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: by, note: str(body.note, 200) });
+  for (let i = 0; i < qty; i++) db().painting.push({ id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: by, note: str(body.note, 200), vendor });
   store.save();
   return { value: { id: '' } };
 }
@@ -2649,6 +2662,19 @@ app.post('/api/painting/correct', (req, res, next) => (req.user && ['painting', 
   const status = req.body.status === 'coming' ? 'coming' : 'in';
   const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120));
   send(res, correctModel(list, req.body.newModel, req.body.qty, painterName(req) + (req.user.role === 'admin' ? '' : ' (painting)')));
+});
+// 🎨 Vendor: set / change the painting vendor of machines on a painting line (no vendor first)
+app.post('/api/painting/vendor', (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
+  const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
+  if (!vendor) return bad(res, 'Choose the painting vendor');
+  const status = req.body.status === 'coming' ? 'coming' : 'in';
+  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && x.vendor !== vendor).sort((a, b) => (a.vendor ? 1 : 0) - (b.vendor ? 1 : 0));
+  if (!list.length) return bad(res, 'Nothing to change');
+  const n = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
+  const at = new Date().toISOString(), by = painterName(req);
+  for (const x of list.slice(0, n)) { (x.edits = x.edits || []).push({ at, by, vendor: { from: x.vendor || '', to: vendor } }); x.vendor = vendor; }
+  store.save();
+  res.json({ ok: true, changed: n });
 });
 const arrivedList = (unitId, model) => db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && m.model === model);
 app.post('/api/staff/assembly/arrived/correct', need('staff'), (req, res) => {
