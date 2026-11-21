@@ -1202,6 +1202,22 @@ if (!db().settings.cut814v1) {
   db().settings.cut814v1 = true;
   store.save();
 }
+// One time: the 10% reduction is removed again for the dispatch logins Satish, Tamanna, Sandeep
+// (team leader reduction stays). Their client dispatches that got the 10% cut get the full amount.
+if (!db().settings.cut814dispatchOff) {
+  const names = ['SATISH', 'TAMANNA', 'SANDEEP'];
+  const ids = [];
+  for (const d of db().dispatchers) if (!d.deleted && names.includes(String(d.name).trim().toUpperCase()) && d.incentiveCut === 10) { d.incentiveCut = 0; ids.push(d.id); }
+  const since = new Date(Date.now() - 62 * 86400000).toISOString();
+  for (const m of db().assembly) {
+    const d = m.dispatchIncentive;
+    if (!d || !ids.includes(d.dispatcherId) || !d.amount || (m.dispatchedAt || '') < since) continue;
+    const full = ASM.dispatchAmount(db(), m.model, d.fromUnitId || m.unitId);
+    if (d.amount === Math.round((full * 90) / 100)) d.amount = full;
+  }
+  db().settings.cut814dispatchOff = true;
+  store.save();
+}
 // Transfer bonus cut to 50%: switch the saved slabs over once, unless the admin had changed them.
 {
   const a = db().settings.assembly;
