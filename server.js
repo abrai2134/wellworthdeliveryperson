@@ -3097,7 +3097,10 @@ admin.post('/painting/coming', (req, res) => {
   const unitId = str(req.body.unitId);
   if (unitId && !liveUnit(unitId)) return bad(res, 'Choose a unit');
   const at = new Date().toISOString();
-  for (let i = 0; i < qty; i++) db().painting.push({ id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null });
+  const into = req.body.status === 'in'; // straight into painting (Ready at Well Worth)
+  for (let i = 0; i < qty; i++) db().painting.push(into
+    ? { id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null }
+    : { id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null });
   store.save();
   res.json({ ok: true });
 });

@@ -2685,7 +2685,7 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
 function paintingHtml(v) {
   const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)}${e.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>` : ''}${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : ''}</span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
   const isAdm = !!(state.me && state.me.role === 'admin');
-  const vendorCard = (v.byVendor || []).length ? `<div class="card section"><div class="row"><h2 style="margin:0">🎨 Vendor-wise</h2><div class="spacer"></div>${shareButtons(v.byVendor.map((g) => `🎨 *${g.vendor || 'Vendor not entered'}*\n` + g.models.map((m) => `• ${m.model} × ${m.coming + m.in}${m.coming ? ` (${m.coming} coming from fab)` : ''}`).join('\n')).join('\n\n'))}</div>
+  const vendorCard = (v.byVendor || []).length || isAdm ? `<div class="card section"><div class="row"><h2 style="margin:0">🎨 Vendor-wise</h2><div class="spacer"></div>${isAdm ? '<button class="small" id="pv-add-mc">+ Add machines</button> ' : ''}${shareButtons(v.byVendor.map((g) => `🎨 *${g.vendor || 'Vendor not entered'}*\n` + g.models.map((m) => `• ${m.model} × ${m.coming + m.in}${m.coming ? ` (${m.coming} coming from fab)` : ''}`).join('\n')).join('\n\n'))}</div>
     <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Vendor</th><th>Model no.</th><th class="num">Coming from fab</th><th class="num">In painting</th>${isAdm ? '<th></th>' : ''}</tr></thead><tbody>
     ${v.byVendor.map((g) => g.models.map((m, i) => `<tr>${i === 0 ? `<td rowspan="${g.models.length}"><b>${g.vendor ? esc(g.vendor) : '<span class="muted">not entered</span>'}</b><div class="small muted">${((n) => `${n} machine${n === 1 ? '' : 's'}`)(g.models.reduce((t, x) => t + x.coming + x.in, 0))}</div></td>` : ''}<td>${esc(m.model)}${(m.entries || []).length ? `<div class="small muted">${m.entries.map((e) => `${esc(e.text.replace(/ · 🎨 vendor [^·]*/, ''))}${e.at ? ` · 🕒 ${esc(fmtTime(e.at + ':00Z'))}` : ''}${e.qty > 1 || m.entries.length > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</div>` : ''}</td><td class="num">${m.coming || ''}</td><td class="num">${m.in || ''}</td>${isAdm ? `<td><button class="small nowrap" data-pv-edit="${esc(g.vendor)}|${m.coming}|${m.in}" data-model="${esc(m.model)}">✎ Edit</button></td>` : ''}</tr>`).join('')).join('')}
     </tbody></table></div>${v.byVendor.some((g) => !g.vendor) ? '<div class="small muted" style="margin-top:4px">For machines with no vendor, press 🎨 Vendor on the line below.</div>' : ''}</div>` : '';
@@ -2719,18 +2719,22 @@ function bindPainting(root, v, reload) {
     async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); try { await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Sent to assembly'); reload(); });
   }));
   // admin only: change the quantity (cancel wrong machines / add missing ones)
-  const addComing = root.querySelector('#paint-add-coming');
-  if (addComing) addComing.onclick = async () => {
+  const addForm = (askStatus, presetVendor) => async () => {
     const models = await loadMachineList();
-    openModal(`<h2>+ Add to "Coming from fab"</h2><p class="small muted">For machines whose ✓ Fab done was missed. Only models with an assembly incentive rate.</p>
+    openModal(`<h2>${askStatus ? '+ Add machines (vendor painting)' : '+ Add to "Coming from fab"'}</h2><p class="small muted">Only models with an assembly incentive rate.</p>
+      ${askStatus ? '<label>Where *</label><select name="status"><option value="coming">⬇ Coming from fab (fab done, not in painting yet)</option><option value="in">🎨 In painting (Ready at Well Worth)</option></select>' : ''}
       <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-pc" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
       <datalist id="asm-models-pc">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
-      <div class="form-grid"><div><label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
+      <div class="form-grid"><div><label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option ${x === presetVendor ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
       <div><label>From unit</label><select name="unitId"><option value="">—</option>${(v.units || []).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></div></div>
       <label>Note</label><input name="note" placeholder="optional">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">+ Add</button></div>`,
-    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); await api('/admin/painting/coming', { method: 'POST', body: Object.fromEntries(fd) }); toast('Added to coming from fab'); reload(); });
+    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); await api('/admin/painting/coming', { method: 'POST', body: Object.fromEntries(fd) }); toast(fd.get('status') === 'in' ? 'Added to in painting' : 'Added to coming from fab'); reload(); });
   };
+  const addComing = root.querySelector('#paint-add-coming');
+  if (addComing) addComing.onclick = addForm(false);
+  const pvAdd = root.querySelector('#pv-add-mc');
+  if (pvAdd) pvAdd.onclick = addForm(true);
   root.querySelectorAll('[data-paint-qty]').forEach((b) => (b.onclick = () => {
     const [status, model, max] = b.dataset.paintQty.split('|');
     openModal(`<h2>✎ Quantity / cancel</h2><div class="muted">⚙️ ${esc(model)} · now <b>${max}</b> ${status === 'coming' ? 'coming from fab' : 'in painting'}</div>
