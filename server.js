@@ -2713,11 +2713,14 @@ admin.post('/assembly/allocate', (req, res) => {
 if (refreshFabAmounts()) store.save(); // on start
 const paintOk = (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' }));
 const paintCreator = (req) => (req.user.role === 'admin' ? { role: 'admin', id: 'admin' } : { role: 'painting', id: req.user.id });
-app.get('/api/painting/home', paintOk, (req, res) => res.json(paintingView()));
+// ⬆ Out of painting: only the admin and painting logins the admin allowed (at first: abrar)
+function painterCanOut(d) { return d.canOut !== undefined ? !!d.canOut : /abrar/i.test(`${d.name} ${d.username}`); }
+const mayOut = (req) => req.user.role === 'admin' || painterCanOut(req.user.account);
+app.get('/api/painting/home', paintOk, (req, res) => res.json({ ...paintingView(), canOut: mayOut(req) }));
 app.post('/api/painting/in', paintOk, (req, res) => send(res, paintIn(req.body, painterName(req))));
 // machines come into painting only from fab (the admin can add missing ones with ✎ Qty)
 app.post('/api/painting/add', paintOk, (req, res) => bad(res, 'Machines come into painting only from fab'));
-app.post('/api/painting/out', paintOk, (req, res) => send(res, paintOut(req.body, painterName(req), paintCreator(req))));
+app.post('/api/painting/out', paintOk, (req, res, next) => (mayOut(req) ? next() : bad(res, 'Only the admin (or a painting login allowed by the admin) can press ⬆ Out')), (req, res) => send(res, paintOut(req.body, painterName(req), paintCreator(req))));
 
 // Fab team leader / fab helper (staff login)
 const isFab = (p) => ['fableader', 'fabhelper', 'fabmanager'].includes(p.role);
@@ -2815,7 +2818,7 @@ admin.get('/fab', (req, res) => {
     month: monthOf(req.query.month),
     board: fabBoard(monthOf(req.query.month)),
     painting: paintingView(),
-    painters: db().painters.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active })),
+    painters: db().painters.filter((d) => !d.deleted).map((d) => ({ id: d.id, name: d.name, username: d.username, active: !!d.active, canOut: painterCanOut(d) })),
   });
 });
 admin.post('/fab', (req, res) => send(res, fabAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
@@ -3036,6 +3039,7 @@ admin.put('/painters/:id', (req, res) => {
   const d = db().painters.find((x) => x.id === req.params.id && !x.deleted);
   if (!d) return res.status(404).json({ error: 'Not found' });
   if (req.body.active !== undefined) d.active = !!req.body.active;
+  if (req.body.canOut !== undefined) d.canOut = !!req.body.canOut;
   if (req.body.password) { if (String(req.body.password).length < 4) return bad(res, 'Password must be at least 4 characters'); d.passHash = auth.hashPassword(String(req.body.password)); }
   store.save();
   res.json({ ok: true });
