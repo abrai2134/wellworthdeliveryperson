@@ -2685,7 +2685,7 @@ function bindPainting(root, v, reload) {
     openModal(`<h2>⬇ Into painting</h2><div class="muted">⚙️ ${esc(model)} · ${max} coming from fab</div>
       <label>How many came in? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="${esc(max)}" required>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬇ In</button></div>`,
-    async (fd) => { await api('/painting/in', { method: 'POST', body: { model, qty: fd.get('qty') } }); toast('Taken into painting'); reload(); });
+    async (fd) => { try { await api('/painting/in', { method: 'POST', body: { model, qty: fd.get('qty') } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Taken into painting'); reload(); });
   }));
   root.querySelectorAll('[data-paint-out]').forEach((b) => (b.onclick = () => {
     const [model, max, unit] = b.dataset.paintOut.split('|');
@@ -2694,7 +2694,7 @@ function bindPainting(root, v, reload) {
       <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="1" required>
       <p class="small muted">They show in that unit as "🎨 Arrived from painting"; a team leader of the unit presses ⚖️ Allocate to share them fairly.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬆ Out</button></div>`,
-    async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); toast('Sent to assembly'); reload(); });
+    async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); try { await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Sent to assembly'); reload(); });
   }));
   // admin only: change the quantity (cancel wrong machines / add missing ones)
   root.querySelectorAll('[data-paint-qty]').forEach((b) => (b.onclick = () => {

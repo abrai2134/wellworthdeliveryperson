@@ -2546,9 +2546,10 @@ function paintingView() {
     return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
   };
   const group = (list) => Object.values(list.reduce((o, x) => {
-    const gm = (o[x.model] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {}, entries: {} });
+    const mk = ASM.exactKey(x.model); // same model even if spaces / case differ
+    const gm = (o[mk] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {}, entries: {} });
     const e = entry(x); const k = e.text + '|' + e.at; (gm.entries[k] ||= { ...e, qty: 0 }).qty++;
-    gm.qty++; if (x.unitId) gm.units[x.unitId] = (gm.units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < o[x.model].oldest) o[x.model].oldest = t; return o; }, {}))
+    gm.qty++; if (x.unitId) gm.units[x.unitId] = (gm.units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < gm.oldest) gm.oldest = t; return o; }, {}))
     .map((g) => ({ ...g, entries: Object.values(g.entries).sort((a, b) => b.at.localeCompare(a.at)) }))
     .sort((a, b) => a.model.localeCompare(b.model));
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
@@ -2582,9 +2583,9 @@ const painterName = (req) => (req.user.role === 'admin' ? 'admin' : req.user.acc
 function paintIn(body, by) {
   const model = str(body.model, 120);
   const qty = parseInt(body.qty, 10);
-  const list = db().painting.filter((x) => x.status === 'coming' && x.model === model).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  const list = db().painting.filter((x) => x.status === 'coming' && ASM.sameRate(x.model, model)).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
-  if (qty > list.length) return { error: `Only ${list.length} coming from fab` };
+  if (qty > list.length) return { error: `Only ${list.length} of this model are still coming from fab – the others were already taken ⬇ In (page was out of date). The list is refreshed – check and try again.` };
   if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };
   const at = new Date().toISOString();
   for (const x of list.slice(0, qty)) { x.status = 'in'; x.inAt = at; x.inBy = by; }
@@ -2612,9 +2613,9 @@ function paintOut(body, by, creator) {
   const qty = parseInt(body.qty, 10);
   const unit = liveUnit(str(body.toUnitId));
   if (!unit) return { error: 'Choose the unit the machines go to for assembly' };
-  const list = db().painting.filter((x) => x.status === 'in' && x.model === model).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
+  const list = db().painting.filter((x) => x.status === 'in' && ASM.sameRate(x.model, model)).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
-  if (qty > list.length) return { error: `Only ${list.length} in painting` };
+  if (qty > list.length) return { error: `Only ${list.length} of this model are still in painting – the others were already sent ⬆ Out (page was out of date). The list is refreshed – check and try again.` };
   if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };
   const at = new Date().toISOString();
   for (const x of list.slice(0, qty)) {
@@ -2662,7 +2663,7 @@ function correctModel(list, newModelRaw, qty, by) {
 }
 app.post('/api/painting/correct', (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
   const status = req.body.status === 'coming' ? 'coming' : 'in';
-  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120));
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, str(req.body.model, 120)));
   send(res, correctModel(list, req.body.newModel, req.body.qty, painterName(req) + (req.user.role === 'admin' ? '' : ' (painting)')));
 });
 // 🎨 Vendor: set / change the painting vendor of machines on a painting line (no vendor first)
@@ -2671,7 +2672,7 @@ app.post('/api/painting/vendor', (req, res, next) => (req.user && ['painting', '
   if (!vendor) return bad(res, 'Choose the painting vendor');
   const status = req.body.status === 'coming' ? 'coming' : 'in';
   const from = req.body.fromVendor; // optional: only machines of this vendor ('' = no vendor)
-  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && x.vendor !== vendor && (from === undefined || (x.vendor || '') === str(from, 80))).sort((a, b) => (a.vendor ? 1 : 0) - (b.vendor ? 1 : 0));
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, str(req.body.model, 120)) && x.vendor !== vendor && (from === undefined || (x.vendor || '') === str(from, 80))).sort((a, b) => (a.vendor ? 1 : 0) - (b.vendor ? 1 : 0));
   if (!list.length) return bad(res, 'Nothing to change');
   const n = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
   const at = new Date().toISOString(), by = painterName(req);
@@ -2993,7 +2994,7 @@ admin.post('/painting/qty', (req, res) => {
   if (!reason) return bad(res, 'Write the reason');
   const want = parseInt(req.body.qty, 10);
   if (!(want >= 0 && want <= 999)) return bad(res, 'Enter the correct quantity');
-  const list = db().painting.filter((x) => x.status === status && x.model === model)
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, model))
     .sort((a, b) => (b.inAt || b.createdAt || '').localeCompare(a.inAt || a.createdAt || '')); // newest first
   const at = new Date().toISOString();
   if (want < list.length) {
@@ -3022,7 +3023,7 @@ admin.post('/painting/cancel', (req, res) => {
   const status = req.body.status === 'coming' ? 'coming' : 'in';
   const reason = str(req.body.reason, 150);
   if (!reason) return bad(res, 'Write the reason');
-  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && (x.vendor || '') === str(req.body.vendor, 80))
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, str(req.body.model, 120)) && (x.vendor || '') === str(req.body.vendor, 80))
     .sort((a, b) => (b.inAt || b.createdAt || '').localeCompare(a.inAt || a.createdAt || ''));
   if (!list.length) return bad(res, 'Nothing to cancel – refresh the page');
   const n = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
