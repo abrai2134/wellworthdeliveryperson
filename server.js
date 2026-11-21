@@ -2558,7 +2558,7 @@ function paintingView() {
   const entry = (x) => {
     const f = x.fabId ? db().fab.find((m) => m.id === x.fabId) : null;
     const fromFab = (f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '') + (x.vendor ? ` · 🎨 vendor ${x.vendor}` : '');
-    if (x.status === 'coming') return { text: `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
+    if (x.status === 'coming') return { text: x.addedBy && !f ? `🏭 added by ${x.addedBy}${x.unitId ? ' · ' + unitName(x.unitId) : ''}${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}` : `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
     return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
   };
   const group = (list) => Object.values(list.reduce((o, x) => {
@@ -3057,12 +3057,13 @@ admin.post('/painting/qty', (req, res) => {
     return res.json({ ok: true, cancelled: n });
   }
   if (want > list.length) {
-    if (status !== 'in') return bad(res, 'Machines coming from fab can only be reduced');
     { const miss = rateMissing(model); if (miss) return bad(res, miss); }
     const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
     if (!vendor) return bad(res, 'Choose the vendor for the added machines');
     const n = want - list.length;
-    for (let i = 0; i < n; i++) db().painting.push({ id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', note: reason, vendor });
+    for (let i = 0; i < n; i++) db().painting.push(status === 'coming'
+      ? { id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: reason, vendor, unitId: list[0] ? list[0].unitId || null : null }
+      : { id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', note: reason, vendor });
     store.save();
     return res.json({ ok: true, added: n });
   }
@@ -3081,6 +3082,22 @@ admin.post('/painting/cancel', (req, res) => {
   for (const x of list.slice(0, n)) { x.status = 'cancelled'; x.cancelledAt = at; x.cancelledBy = 'admin'; x.cancelReason = reason; x.cancelledFrom = status; }
   store.save();
   res.json({ ok: true, cancelled: n });
+});
+// Admin: add machines to "Coming from fab" (missed Fab done entries)
+admin.post('/painting/coming', (req, res) => {
+  const model = canonModel(req.body.model);
+  if (!model) return bad(res, 'Enter the model no.');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
+  const qty = parseInt(req.body.qty, 10);
+  if (!(qty >= 1 && qty <= 50)) return bad(res, 'Quantity must be 1 to 50');
+  const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
+  if (!vendor) return bad(res, 'Choose the painting vendor');
+  const unitId = str(req.body.unitId);
+  if (unitId && !liveUnit(unitId)) return bad(res, 'Choose a unit');
+  const at = new Date().toISOString();
+  for (let i = 0; i < qty; i++) db().painting.push({ id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null });
+  store.save();
+  res.json({ ok: true });
 });
 admin.put('/painting/vendors', (req, res) => {
   const list = [...new Map((Array.isArray(req.body.vendors) ? req.body.vendors : []).map((v) => str(v, 60)).filter(Boolean).map((v) => [v.toUpperCase(), v])).values()].slice(0, 50);

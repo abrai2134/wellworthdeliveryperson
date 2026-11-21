@@ -2694,7 +2694,7 @@ function paintingHtml(v) {
     const vend = (model) => (v.byVendor || []).map((g) => { const m = g.models.find((x) => x.model === model); return m && m[key] ? `${g.vendor || 'no vendor'} ${m[key]}` : ''; }).filter(Boolean).join(', ');
     return `🎨 *${title}* (${fmtDate(state.today || new Date().toISOString().slice(0, 10))})\n` + list.map((x) => `• ${x.model} × ${x.qty}${vend(x.model) ? ` – ${vend(x.model)}` : ''}`).join('\n') + `\nTotal: ${list.reduce((t, x) => t + x.qty, 0)}`;
   };
-  return vendorCard + `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span>${v.coming.length ? shareButtons(shareOf('Coming from fab', v.coming, 'coming')) : ''}</div>
+  return vendorCard + `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span>${v.coming.length ? shareButtons(shareOf('Coming from fab', v.coming, 'coming')) : ''}${isAdm ? '<button class="small" id="paint-add-coming">+ Add</button>' : ''}</div>
       <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="coming|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="coming|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting (Ready at Well Worth)</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span>${v.inPainting.length ? shareButtons(shareOf('In painting (Ready at Well Worth)', v.inPainting, 'in')) : ''}</div>
       <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `${v.canOut === false ? '' : `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`}` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="in|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="in|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
@@ -2719,13 +2719,25 @@ function bindPainting(root, v, reload) {
     async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); try { await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Sent to assembly'); reload(); });
   }));
   // admin only: change the quantity (cancel wrong machines / add missing ones)
+  const addComing = root.querySelector('#paint-add-coming');
+  if (addComing) addComing.onclick = async () => {
+    const models = await loadMachineList();
+    openModal(`<h2>+ Add to "Coming from fab"</h2><p class="small muted">For machines whose ✓ Fab done was missed. Only models with an assembly incentive rate.</p>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="asm-models-pc" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="50" value="1" required></div></div>
+      <datalist id="asm-models-pc">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      <div class="form-grid"><div><label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
+      <div><label>From unit</label><select name="unitId"><option value="">—</option>${(v.units || []).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></div></div>
+      <label>Note</label><input name="note" placeholder="optional">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">+ Add</button></div>`,
+    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); await api('/admin/painting/coming', { method: 'POST', body: Object.fromEntries(fd) }); toast('Added to coming from fab'); reload(); });
+  };
   root.querySelectorAll('[data-paint-qty]').forEach((b) => (b.onclick = () => {
     const [status, model, max] = b.dataset.paintQty.split('|');
     openModal(`<h2>✎ Quantity / cancel</h2><div class="muted">⚙️ ${esc(model)} · now <b>${max}</b> ${status === 'coming' ? 'coming from fab' : 'in painting'}</div>
       <label>Correct quantity *</label><input name="qty" type="number" min="0" max="999" value="${esc(max)}" required>
-      <div class="small muted">Lower = the extra machines are cancelled (newest first). 0 = cancel all.${status === 'in' ? ' Higher = machines are added (not from fab).' : ''}</div>
+      <div class="small muted">Lower = the extra machines are cancelled (newest first). 0 = cancel all. Higher = machines are added.</div>
       <label>Reason *</label><input name="reason" required placeholder="e.g. entered 7, only 4 in painting">
-      ${status === 'in' ? `<label>🎨 Vendor for added machines</label><select name="vendor"><option value="">— only if adding —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select>` : ''}
+      <label>🎨 Vendor for added machines</label><select name="vendor"><option value="">— only if adding —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option>${esc(x)}</option>`).join('')}</select>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
     async (fd) => {
       if (!String(fd.get('reason') || '').trim()) throw new Error('Write the reason');
