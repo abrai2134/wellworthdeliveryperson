@@ -2558,8 +2558,9 @@ function paintingView() {
   const entry = (x) => {
     const f = x.fabId ? db().fab.find((m) => m.id === x.fabId) : null;
     const fromFab = (f ? `from fab · ${unitName(f.unitId) ? unitName(f.unitId) + ' – ' : ''}${personName(f.leaderId) || '?'} (fab done by ${f.doneBy || '?'})` : '') + (x.vendor ? ` · 🎨 vendor ${x.vendor}` : '');
-    if (x.status === 'coming') return { text: x.addedBy && !f ? `🏭 added by ${x.addedBy}${x.unitId ? ' · ' + unitName(x.unitId) : ''}${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}` : `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
-    return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
+    const made = x.madeBy ? ` · ${x.unitId ? unitName(x.unitId) + ' – ' : ''}made by ${x.madeBy}` : x.unitId && !f ? ' · ' + unitName(x.unitId) : '';
+    if (x.status === 'coming') return { text: x.addedBy && !f ? `🏭 added by ${x.addedBy}${made}${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}` : `🏭 ${fromFab || 'from fab'}`, at: String(x.createdAt || '').slice(0, 16) };
+    return { text: x.fromFab ? `⬇ In by ${x.inBy || '?'} · ${x.addedBy && !f ? `added by ${x.addedBy}${made}${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}` : fromFab || 'from fab'}` : `⬇ Added directly by ${x.inBy || '?'} (not from fab)${made}${x.vendor ? ' · 🎨 vendor ' + x.vendor : ''}${x.note ? ' – ' + x.note : ''}`, at: String(x.inAt || '').slice(0, 16) };
   };
   const group = (list) => Object.values(list.reduce((o, x) => {
     const mk = ASM.exactKey(x.model); // same model even if spaces / case differ
@@ -2591,6 +2592,7 @@ function paintingView() {
     .map((v) => ({ vendor: v, models: Object.values(bv[v]).map((m) => ({ ...m, entries: Object.values(m.entries).sort((a, b) => b.at.localeCompare(a.at)) })).sort((a, b) => a.model.localeCompare(b.model)) }));
   return {
     byVendor, vendors: paintVendors(),
+    fabLeaders: db().people.filter((p) => p.role === 'fableader' && !p.deleted).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId || '', unitName: unitName(p.unitId) })),
     coming: group(P.filter((x) => x.status === 'coming')),
     inPainting: group(P.filter((x) => x.status === 'in')),
     history: Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100),
@@ -3097,10 +3099,14 @@ admin.post('/painting/coming', (req, res) => {
   const unitId = str(req.body.unitId);
   if (unitId && !liveUnit(unitId)) return bad(res, 'Choose a unit');
   const at = new Date().toISOString();
+  // who made it (fab leader) – compulsory
+  const madeBy = str(req.body.madeBy, 80);
+  if (!madeBy) return bad(res, 'Write who made it (fab leader)');
+  const mp = db().people.find((p) => p.role === 'fableader' && !p.deleted && p.name.trim().toUpperCase() === madeBy.toUpperCase() && (!unitId || !p.unitId || p.unitId === unitId));
   const into = req.body.status === 'in'; // straight into painting (Ready at Well Worth)
   for (let i = 0; i < qty; i++) db().painting.push(into
-    ? { id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null }
-    : { id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null });
+    ? { id: newId('pnt'), model, status: 'in', fromFab: false, createdAt: at, inAt: at, inBy: 'admin', addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null, madeBy: mp ? mp.name : madeBy, madeById: mp ? mp.id : null }
+    : { id: newId('pnt'), model, status: 'coming', fromFab: true, createdAt: at, addedBy: 'admin', note: str(req.body.note, 200), vendor, unitId: unitId || null, madeBy: mp ? mp.name : madeBy, madeById: mp ? mp.id : null });
   store.save();
   res.json({ ok: true });
 });

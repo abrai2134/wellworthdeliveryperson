@@ -2727,9 +2727,11 @@ function bindPainting(root, v, reload) {
       <datalist id="asm-models-pc">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
       <div class="form-grid"><div><label>🎨 Painting vendor *</label><select name="vendor" required><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).map((x) => `<option ${x === presetVendor ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
       <div><label>From unit</label><select name="unitId"><option value="">—</option>${(v.units || []).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select></div></div>
+      <label>👷 Made by (fab leader) *</label><input name="madeBy" list="pc-makers" required placeholder="name of the person who made it">
+      <datalist id="pc-makers">${(v.fabLeaders || []).map((p) => `<option value="${esc(p.name)}">${esc(p.unitName || '')}</option>`).join('')}</datalist>
       <label>Note</label><input name="note" placeholder="optional">
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">+ Add</button></div>`,
-    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); await api('/admin/painting/coming', { method: 'POST', body: Object.fromEntries(fd) }); toast(fd.get('status') === 'in' ? 'Added to in painting' : 'Added to coming from fab'); reload(); });
+    async (fd) => { if (!fd.get('vendor')) throw new Error('Choose the painting vendor'); if (!String(fd.get('madeBy') || '').trim()) throw new Error('Write who made it'); await api('/admin/painting/coming', { method: 'POST', body: Object.fromEntries(fd) }); toast(fd.get('status') === 'in' ? 'Added to in painting' : 'Added to coming from fab'); reload(); });
   };
   const addComing = root.querySelector('#paint-add-coming');
   if (addComing) addComing.onclick = addForm(false);
