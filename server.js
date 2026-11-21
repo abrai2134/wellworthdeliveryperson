@@ -2582,11 +2582,13 @@ function paintingView() {
   for (const x of P) {
     if (x.status !== 'coming' && x.status !== 'in') continue;
     const v = x.vendor || '';
-    const r = ((bv[v] ||= {})[x.model] ||= { model: x.model, coming: 0, in: 0 });
+    const r = ((bv[v] ||= {})[ASM.exactKey(x.model)] ||= { model: x.model, coming: 0, in: 0, entries: {} });
     r[x.status === 'coming' ? 'coming' : 'in']++;
+    // from which unit / fab leader, who did Fab done and ⬇ In, when
+    const e = entry(x); const ek = e.text + '|' + e.at; (r.entries[ek] ||= { ...e, qty: 0 }).qty++;
   }
   const byVendor = Object.keys(bv).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b))
-    .map((v) => ({ vendor: v, models: Object.values(bv[v]).sort((a, b) => a.model.localeCompare(b.model)) }));
+    .map((v) => ({ vendor: v, models: Object.values(bv[v]).map((m) => ({ ...m, entries: Object.values(m.entries).sort((a, b) => b.at.localeCompare(a.at)) })).sort((a, b) => a.model.localeCompare(b.model)) }));
   return {
     byVendor, vendors: paintVendors(),
     coming: group(P.filter((x) => x.status === 'coming')),
