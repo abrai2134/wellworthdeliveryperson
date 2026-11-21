@@ -2662,9 +2662,10 @@ function bindFab(root, base, items, reload, people, kind = 'fab') {
 // Painting: ⬇ In (from fab, or added directly) and ⬆ Out (to a unit's assembly).
 function paintingHtml(v) {
   const line = (x, btn) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b><span class="small muted">oldest ${esc(ageText(x.oldest))}</span>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)}${e.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>` : ''}${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : ''}</span><span class="godown-qty">${x.qty}</span>${btn}</div>`;
+  const isAdm = !!(state.me && state.me.role === 'admin');
   const vendorCard = (v.byVendor || []).length ? `<div class="card section"><div class="row"><h2 style="margin:0">🎨 Vendor-wise</h2><div class="spacer"></div>${shareButtons(v.byVendor.map((g) => `🎨 *${g.vendor || 'Vendor not entered'}*\n` + g.models.map((m) => `• ${m.model} × ${m.coming + m.in}${m.coming ? ` (${m.coming} coming from fab)` : ''}`).join('\n')).join('\n\n'))}</div>
-    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Vendor</th><th>Model no.</th><th class="num">Coming from fab</th><th class="num">In painting</th></tr></thead><tbody>
-    ${v.byVendor.map((g) => g.models.map((m, i) => `<tr>${i === 0 ? `<td rowspan="${g.models.length}"><b>${g.vendor ? esc(g.vendor) : '<span class="muted">not entered</span>'}</b><div class="small muted">${((n) => `${n} machine${n === 1 ? '' : 's'}`)(g.models.reduce((t, x) => t + x.coming + x.in, 0))}</div></td>` : ''}<td>${esc(m.model)}</td><td class="num">${m.coming || ''}</td><td class="num">${m.in || ''}</td></tr>`).join('')).join('')}
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Vendor</th><th>Model no.</th><th class="num">Coming from fab</th><th class="num">In painting</th>${isAdm ? '<th></th>' : ''}</tr></thead><tbody>
+    ${v.byVendor.map((g) => g.models.map((m, i) => `<tr>${i === 0 ? `<td rowspan="${g.models.length}"><b>${g.vendor ? esc(g.vendor) : '<span class="muted">not entered</span>'}</b><div class="small muted">${((n) => `${n} machine${n === 1 ? '' : 's'}`)(g.models.reduce((t, x) => t + x.coming + x.in, 0))}</div></td>` : ''}<td>${esc(m.model)}</td><td class="num">${m.coming || ''}</td><td class="num">${m.in || ''}</td>${isAdm ? `<td><button class="small nowrap" data-pv-edit="${esc(g.vendor)}|${m.coming}|${m.in}" data-model="${esc(m.model)}">✎ Edit</button></td>` : ''}</tr>`).join('')).join('')}
     </tbody></table></div>${v.byVendor.some((g) => !g.vendor) ? '<div class="small muted" style="margin-top:4px">For machines with no vendor, press 🎨 Vendor on the line below.</div>' : ''}</div>` : '';
   // WhatsApp text: one line per model with qty and vendor(s)
   const shareOf = (title, list, key) => {
@@ -2711,6 +2712,37 @@ function bindPainting(root, v, reload) {
       const r = await api('/admin/painting/qty', { method: 'POST', body: { status, model, qty: n, reason: fd.get('reason'), vendor: fd.get('vendor') || '' } });
       toast(r.cancelled ? `${r.cancelled} cancelled` : r.added ? `${r.added} added` : 'No change'); reload();
     });
+  }));
+  // admin: ✎ Edit a vendor-wise row – change the vendor or cancel wrong machines
+  root.querySelectorAll('[data-pv-edit]').forEach((b) => (b.onclick = () => {
+    const [vendor, coming, inP] = b.dataset.pvEdit.split('|');
+    const model = b.dataset.model;
+    const both = +coming && +inP;
+    openModal(`<h2>✎ Edit – ${esc(vendor || 'no vendor')}</h2><div class="muted">⚙️ ${esc(model)} · ${+coming ? coming + ' coming from fab' : ''}${both ? ' · ' : ''}${+inP ? inP + ' in painting' : ''}</div>
+      ${both ? `<label>Which machines? *</label><select name="status"><option value="in">In painting (${inP})</option><option value="coming">Coming from fab (${coming})</option></select>` : `<input type="hidden" name="status" value="${+inP ? 'in' : 'coming'}">`}
+      <div class="row" style="margin-top:8px"><label class="check"><input type="radio" name="act" value="vendor" checked> 🎨 Change vendor</label><label class="check"><input type="radio" name="act" value="cancel"> ✕ Cancel wrong machines</label></div>
+      <div id="pv-to"><label>New vendor *</label><select name="vendor"><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).filter((x) => x !== vendor).map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
+      <div id="pv-reason" hidden><label>Reason *</label><input name="reason" placeholder="e.g. entered twice"></div>
+      <label>How many? *</label><input name="qty" type="number" min="1" max="${Math.max(+coming, +inP)}" value="${+inP || +coming}" required>
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+    async (fd) => {
+      const status = fd.get('status');
+      if (fd.get('act') === 'cancel') {
+        if (!String(fd.get('reason') || '').trim()) throw new Error('Write the reason');
+        if (!confirm(`Cancel ${fd.get('qty')} × ${model}?`)) return;
+        const r = await api('/admin/painting/cancel', { method: 'POST', body: { status, model, vendor, qty: fd.get('qty'), reason: fd.get('reason') } });
+        toast(`${r.cancelled} cancelled`);
+      } else {
+        if (!fd.get('vendor')) throw new Error('Choose the new vendor');
+        const r = await api('/painting/vendor', { method: 'POST', body: { status, model, vendor: fd.get('vendor'), fromVendor: vendor, qty: fd.get('qty') } });
+        toast(`${r.changed} moved to ${fd.get('vendor')}`);
+      }
+      reload();
+    });
+    modalBody.querySelectorAll('[name=act]').forEach((x) => (x.onchange = () => {
+      const c = modalBody.querySelector('[name=act]:checked').value === 'cancel';
+      modalBody.querySelector('#pv-to').hidden = c; modalBody.querySelector('#pv-reason').hidden = !c;
+    }));
   }));
   root.querySelectorAll('[data-paint-vendor]').forEach((b) => (b.onclick = () => {
     const [status, model, max] = b.dataset.paintVendor.split('|');

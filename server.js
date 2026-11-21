@@ -2670,7 +2670,8 @@ app.post('/api/painting/vendor', (req, res, next) => (req.user && ['painting', '
   const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
   if (!vendor) return bad(res, 'Choose the painting vendor');
   const status = req.body.status === 'coming' ? 'coming' : 'in';
-  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && x.vendor !== vendor).sort((a, b) => (a.vendor ? 1 : 0) - (b.vendor ? 1 : 0));
+  const from = req.body.fromVendor; // optional: only machines of this vendor ('' = no vendor)
+  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && x.vendor !== vendor && (from === undefined || (x.vendor || '') === str(from, 80))).sort((a, b) => (a.vendor ? 1 : 0) - (b.vendor ? 1 : 0));
   if (!list.length) return bad(res, 'Nothing to change');
   const n = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
   const at = new Date().toISOString(), by = painterName(req);
@@ -3015,6 +3016,20 @@ admin.post('/painting/qty', (req, res) => {
     return res.json({ ok: true, added: n });
   }
   res.json({ ok: true });
+});
+// Admin: cancel wrong machines of one vendor-wise row (model + vendor + coming / in)
+admin.post('/painting/cancel', (req, res) => {
+  const status = req.body.status === 'coming' ? 'coming' : 'in';
+  const reason = str(req.body.reason, 150);
+  if (!reason) return bad(res, 'Write the reason');
+  const list = db().painting.filter((x) => x.status === status && x.model === str(req.body.model, 120) && (x.vendor || '') === str(req.body.vendor, 80))
+    .sort((a, b) => (b.inAt || b.createdAt || '').localeCompare(a.inAt || a.createdAt || ''));
+  if (!list.length) return bad(res, 'Nothing to cancel – refresh the page');
+  const n = Math.max(1, Math.min(list.length, parseInt(req.body.qty, 10) || 1));
+  const at = new Date().toISOString();
+  for (const x of list.slice(0, n)) { x.status = 'cancelled'; x.cancelledAt = at; x.cancelledBy = 'admin'; x.cancelReason = reason; x.cancelledFrom = status; }
+  store.save();
+  res.json({ ok: true, cancelled: n });
 });
 admin.put('/painting/vendors', (req, res) => {
   const list = [...new Map((Array.isArray(req.body.vendors) ? req.body.vendors : []).map((v) => str(v, 60)).filter(Boolean).map((v) => [v.toUpperCase(), v])).values()].slice(0, 50);
