@@ -2663,7 +2663,8 @@ function correctModel(list, newModelRaw, qty, by) {
 }
 app.post('/api/painting/correct', (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
   const status = req.body.status === 'coming' ? 'coming' : 'in';
-  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, str(req.body.model, 120)));
+  const from = req.body.fromVendor; // optional: only machines of this vendor ('' = no vendor)
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, str(req.body.model, 120)) && (from === undefined || (x.vendor || '') === str(from, 80)));
   send(res, correctModel(list, req.body.newModel, req.body.qty, painterName(req) + (req.user.role === 'admin' ? '' : ' (painting)')));
 });
 // 🎨 Vendor: set / change the painting vendor of machines on a painting line (no vendor first)
