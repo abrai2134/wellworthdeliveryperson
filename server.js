@@ -2686,6 +2686,39 @@ app.post('/api/staff/assembly/arrived/correct', need('staff'), (req, res) => {
   if (p.role !== 'leader') return bad(res, 'Only team leaders can correct');
   send(res, correctModel(arrivedList(p.unitId, str(req.body.model, 120)), req.body.newModel, req.body.qty, p.name));
 });
+// Admin: correct the quantity of machines arrived from painting at a unit.
+// Lower → the extra go back to painting (wrong ⬆ Out) or are cancelled; higher → more arrive.
+admin.post('/assembly/arrived/qty', (req, res) => {
+  const unitId = str(req.body.unitId);
+  const model = str(req.body.model, 120);
+  const reason = str(req.body.reason, 150);
+  if (!reason) return bad(res, 'Write the reason');
+  const want = parseInt(req.body.qty, 10);
+  if (!(want >= 0 && want <= 999)) return bad(res, 'Enter the correct quantity');
+  const list = db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && ASM.sameRate(m.model, model))
+    .sort((a, b) => (b.arrivedAt || '').localeCompare(a.arrivedAt || '')); // newest first
+  const at = new Date().toISOString();
+  if (want < list.length) {
+    const n = list.length - want;
+    const back = req.body.action === 'back';
+    for (const m of list.slice(0, n)) {
+      m.status = 'cancelled'; m.cancelledAt = at; m.cancelledBy = 'admin'; m.cancelReason = (back ? 'back to painting – ' : '') + reason;
+      const x = m.paintId && db().painting.find((p) => p.id === m.paintId);
+      if (x && back) { (x.edits = x.edits || []).push({ at, by: 'admin', note: 'back from ' + unitName(unitId) + ' – ' + reason, out: { at: x.outAt, by: x.outBy } }); x.status = 'in'; delete x.outAt; delete x.outBy; delete x.toUnitId; delete x.asmId; }
+    }
+    store.save();
+    return res.json({ ok: true, changed: n, back });
+  }
+  if (want > list.length) {
+    if (!liveUnit(unitId)) return bad(res, 'Unit not found');
+    { const miss = rateMissing(canonModel(model)); if (miss) return bad(res, miss); }
+    const n = want - list.length;
+    for (let i = 0; i < n; i++) db().assembly.push({ id: newId('asm'), unitId, model: canonModel(model), status: 'arrived', arrivedAt: at, source: 'paint', createdAt: at, createdBy: 'admin', creator: { role: 'admin', id: 'admin' }, entryBy: 'admin (qty corrected)', note: reason });
+    store.save();
+    return res.json({ ok: true, added: n });
+  }
+  res.json({ ok: true });
+});
 admin.post('/assembly/arrived/correct', (req, res) => send(res, correctModel(arrivedList(str(req.body.unitId), str(req.body.model, 120)), req.body.newModel, req.body.qty, 'admin')));
 // "Allocate": share the arrived machines fairly between the unit's team leaders (as before).
 function allocateArrived(unitId, model, by) {

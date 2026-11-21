@@ -1521,7 +1521,7 @@ function arrivedHtml(list, url, unitId) {
   if (!list || !list.length) return '';
   const total = list.reduce((t, x) => t + x.qty, 0);
   return `<div class="card section" style="border-color:#f0c36d"><div class="row"><h3 style="margin:0">🎨 Arrived from painting – ${total} machine${total === 1 ? '' : 's'} not given out yet</h3><div class="spacer"></div>${url ? `<button class="primary small" data-allocate="${esc(url)}|${esc(unitId || '')}|">⚖️ Allocate all</button>` : ''}</div>
-    ${list.map((x) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)} · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : `<span class="small muted">arrived ${esc(fmtTime(x.oldest))}</span>`}</span><span class="godown-qty">${x.qty}</span>${url ? `<button class="small nowrap" data-arrived-fix="${esc(url.replace('/allocate', '/arrived/correct'))}|${esc(unitId || '')}|${x.qty}" data-model="${esc(x.model)}">✎ Correct</button> ` : ''}${url ? `<button class="small nowrap" data-allocate="${esc(url)}|${esc(unitId || '')}|${esc(x.model)}">⚖️ Allocate</button>` : ''}</div>`).join('')}
+    ${list.map((x) => `<div class="godown-row"><span class="dr-main"><b>${esc(x.model)}</b>${(x.entries || []).length ? `<span class="small muted">${x.entries.map((e) => `${esc(e.text)} · <span class="nowrap">🕒 ${esc(fmtTime(e.at + ':00Z'))}</span>${x.entries.length > 1 || e.qty > 1 ? ` × ${e.qty}` : ''}`).join('<br>')}</span>` : `<span class="small muted">arrived ${esc(fmtTime(x.oldest))}</span>`}</span><span class="godown-qty">${x.qty}</span>${url && url.startsWith('/admin') ? `<button class="small nowrap danger" data-arrived-qty="${esc(unitId || '')}|${x.qty}" data-model="${esc(x.model)}">✎ Qty</button> ` : ''}${url ? `<button class="small nowrap" data-arrived-fix="${esc(url.replace('/allocate', '/arrived/correct'))}|${esc(unitId || '')}|${x.qty}" data-model="${esc(x.model)}">✎ Correct</button> ` : ''}${url ? `<button class="small nowrap" data-allocate="${esc(url)}|${esc(unitId || '')}|${esc(x.model)}">⚖️ Allocate</button>` : ''}</div>`).join('')}
     ${url ? '<div class="small muted" style="margin-top:6px">Allocate shares them fairly between the team leaders (fewest open first), with an installation person and a helper.</div>' : '<div class="small muted" style="margin-top:6px">A team leader of this unit presses ⚖️ Allocate to share them out.</div>'}</div>`;
 }
 document.addEventListener('click', async (e) => {
@@ -1548,6 +1548,28 @@ function modelFixForm(title, model, max, post, reload) {
     async (fd) => { const r = await post({ newModel: fd.get('newModel'), qty: fd.get('qty') }); toast(`${r.changed} changed to ${r.model}`); reload(); });
   };
 }
+// admin: ✎ Qty on machines arrived from painting
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-arrived-qty]');
+  if (!b) return;
+  const [unitId, max] = b.dataset.arrivedQty.split('|');
+  const model = b.dataset.model;
+  openModal(`<h2>✎ Quantity – arrived from painting</h2><div class="muted">⚙️ ${esc(model)} · now <b>${max}</b></div>
+    <label>Correct quantity *</label><input name="qty" type="number" min="0" max="999" value="${esc(max)}" required>
+    <div id="aq-less"><label>The extra machines *</label>
+      <div class="row"><label class="check"><input type="radio" name="action" value="back" checked> ↩ Back to painting (Out pressed by mistake)</label><label class="check"><input type="radio" name="action" value="cancel"> ✕ Cancel (wrong entry)</label></div></div>
+    <div class="small muted">Higher = more machines are added as arrived.</div>
+    <label>Reason *</label><input name="reason" required placeholder="e.g. only 3 came, 5 entered">
+    <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
+  async (fd) => {
+    if (!String(fd.get('reason') || '').trim()) throw new Error('Write the reason');
+    const n = Number(fd.get('qty'));
+    if (n < Number(max) && !confirm(`${fd.get('action') === 'back' ? 'Send back to painting' : 'Cancel'} ${Number(max) - n} × ${model}?`)) return;
+    const r = await api('/admin/assembly/arrived/qty', { method: 'POST', body: { unitId, model, qty: n, action: fd.get('action'), reason: fd.get('reason') } });
+    toast(r.added ? `${r.added} added` : r.changed ? `${r.changed} ${r.back ? 'sent back to painting' : 'cancelled'}` : 'No change');
+    render();
+  });
+});
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-arrived-fix]');
   if (!b) return;
