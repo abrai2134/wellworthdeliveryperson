@@ -150,7 +150,7 @@ app.get('/api/public/find', (req, res) => {
   const out = {};
   const row = (model, unitId) => {
     const m = (out[model] ||= { model, units: {} });
-    return (m.units[unitId || ''] ||= { unit: units[unitId] || '(no unit)', bending: 0, fabNotStarted: 0, inFab: 0, paintComing: 0, inPainting: 0, arrived: 0, notStarted: 0, assembling: 0, godown: 0, booked: 0, who: { bend: {}, fab: {}, paint: {}, asm: {} } });
+    return (m.units[unitId || ''] ||= { unit: units[unitId] || '(no unit)', bending: 0, fabNotStarted: 0, inFab: 0, paintComing: 0, inPainting: 0, arrived: 0, notStarted: 0, assembling: 0, godown: 0, booked: 0, who: { bend: {}, fab: {}, paint: {}, asm: {}, booked: {} } });
   };
   // who is doing it: bending / fab / assembly leader, painting vendor (names only, no money)
   const pname = (id) => (db().people.find((p) => p.id === id) || {}).name || '';
@@ -163,7 +163,7 @@ app.get('/api/public/find', (req, res) => {
     if (m.status === 'arrived') row(m.model, m.unitId).arrived++;
     else if (m.status === 'waiting' || m.status === 'assigned') { const r = row(m.model, m.unitId); r.notStarted++; addWho(r, 'asm', pname(m.leaderId) || '⏳ waiting'); }
     else if (m.status === 'started') { const r = row(m.model, m.unitId); r.assembling++; addWho(r, 'asm', pname(m.leaderId)); }
-    else if (m.status === 'done' && m.location === 'godown') { const r = row(m.model, m.unitId); r.godown++; if (m.bookedParty) r.booked++; }
+    else if (m.status === 'done' && m.location === 'godown') { const r = row(m.model, m.unitId); r.godown++; if (m.bookedParty) { r.booked++; addWho(r, 'booked', '👤 ' + m.bookedParty); } }
   }
   const models = Object.values(out).map((m) => ({ model: m.model, units: Object.values(m.units).sort((a, b) => a.unit.localeCompare(b.unit)) }))
     .sort((a, b) => a.model.localeCompare(b.model)).slice(0, onlyUnit && q.length < 2 ? 200 : 30);
