@@ -179,12 +179,14 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
       try {
         const r = await api('/public/find?q=' + encodeURIComponent(q) + '&unitId=' + encodeURIComponent(unitId));
         const n = (v) => (v ? `<b>${v}</b>` : '<span class="muted">–</span>');
-        const cell = (main, sub) => `<td class="num">${n(main)}${sub ? `<div class="muted">${sub}</div>` : ''}</td>`;
+        // names of who is doing it, e.g. "👷 Amim × 4"
+        const names = (o) => Object.entries(o || {}).map(([k, c]) => `<div class="small" style="white-space:nowrap">${k.startsWith('🎨') || k.startsWith('🏢') || k.startsWith('⏳') ? '' : '👷 '}${esc(k)}${c > 1 ? ` × ${c}` : ''}</div>`).join('');
+        const cell = (main, sub, who) => `<td class="num">${n(main)}${sub ? `<div class="muted">${sub}</div>` : ''}${names(who)}</td>`;
         const rows = r.models.flatMap((m) => m.units.map((u, k) => `<tr>${k === 0 ? `<td rowspan="${m.units.length}"><b>${esc(m.model)}</b></td>` : ''}<td>${esc(u.unit)}</td>
-            ${cell(u.bending || 0, '')}
-            ${cell(u.fabNotStarted + u.inFab, u.inFab ? `${u.inFab} in fab` : '')}
-            ${cell(u.paintComing + u.inPainting, u.paintComing ? `${u.paintComing} coming` : '')}
-            ${cell(u.arrived + u.notStarted + u.assembling, [u.assembling ? `${u.assembling} assembling` : '', u.arrived ? `${u.arrived} arrived` : ''].filter(Boolean).join('<br>'))}
+            ${cell(u.bending || 0, '', (u.who || {}).bend)}
+            ${cell(u.fabNotStarted + u.inFab, u.inFab ? `${u.inFab} in fab` : '', (u.who || {}).fab)}
+            ${cell(u.paintComing + u.inPainting, u.paintComing ? `${u.paintComing} coming` : '', (u.who || {}).paint)}
+            ${cell(u.arrived + u.notStarted + u.assembling, [u.assembling ? `${u.assembling} assembling` : '', u.arrived ? `${u.arrived} arrived` : ''].filter(Boolean).join('<br>'), (u.who || {}).asm)}
             ${cell(u.godown, u.booked ? `${u.booked} booked` : '')}</tr>`));
         out.innerHTML = r.models.length ? `<div class="table-wrap"><table><thead><tr><th>Model no.</th><th>Unit</th><th class="num">🔩 Bending</th><th class="num">🏭 Fab</th><th class="num">🎨 Painting</th><th class="num">🛠️ Assembly</th><th class="num">🏬 Godown</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
           : '<span class="muted">No machine of this model in fab, painting, assembly or godown.</span>';
