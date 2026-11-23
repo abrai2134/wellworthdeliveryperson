@@ -180,15 +180,20 @@ function renderLogin(role = localStorageGet('role') || 'unit') {
         const r = await api('/public/find?q=' + encodeURIComponent(q) + '&unitId=' + encodeURIComponent(unitId));
         const n = (v) => (v ? `<b>${v}</b>` : '<span class="muted">–</span>');
         // names of who is doing it, e.g. "👷 Amim × 4"
-        const names = (o) => Object.entries(o || {}).map(([k, c]) => `<div class="small" style="white-space:nowrap">${k.startsWith('🎨') || k.startsWith('🏢') || k.startsWith('⏳') || k.startsWith('👤') ? '' : '👷 '}${esc(k)}${c > 1 ? ` × ${c}` : ''}</div>`).join('');
+        const names = (o) => Object.entries(o || {}).map(([k, c]) => `<div class="small" style="white-space:${k.startsWith('👤') ? 'normal;min-width:140px' : 'nowrap'}">${k.startsWith('🎨') || k.startsWith('🏢') || k.startsWith('⏳') || k.startsWith('👤') ? '' : '👷 '}${esc(k)}${c > 1 ? ` × ${c}` : ''}</div>`).join('');
         const cell = (main, sub, who) => `<td class="num">${n(main)}${sub ? `<div class="muted">${sub}</div>` : ''}${names(who)}</td>`;
-        const rows = r.models.flatMap((m) => m.units.map((u, k) => `<tr>${k === 0 ? `<td rowspan="${m.units.length}"><b>${esc(m.model)}</b></td>` : ''}<td>${esc(u.unit)}</td>
+        const tot = (u) => (u.bending || 0) + u.fabNotStarted + u.inFab + u.paintComing + u.inPainting + u.arrived + u.notStarted + u.assembling + u.godown;
+        // a Total row per model when it is in more than one unit
+        const sumRow = (m) => { if (m.units.length < 2) return ''; const S = (f) => m.units.reduce((t, u) => t + f(u), 0);
+          return `<tr style="background:var(--soft,#f4f7fb)"><td><b>Total</b></td><td class="num"><b>${S((u) => u.bending || 0)}</b></td><td class="num"><b>${S((u) => u.fabNotStarted + u.inFab)}</b></td><td class="num"><b>${S((u) => u.paintComing + u.inPainting)}</b></td><td class="num"><b>${S((u) => u.arrived + u.notStarted + u.assembling)}</b></td><td class="num"><b>${S((u) => u.godown)}</b></td><td class="num"><b>${S(tot)}</b></td></tr>`; };
+        const rows = r.models.flatMap((m) => [...m.units.map((u, k) => `<tr>${k === 0 ? `<td rowspan="${m.units.length + (m.units.length > 1 ? 1 : 0)}"><b>${esc(m.model)}</b></td>` : ''}<td>${esc(u.unit)}</td>
             ${cell(u.bending || 0, '', (u.who || {}).bend)}
             ${cell(u.fabNotStarted + u.inFab, u.inFab ? `${u.inFab} in fab` : '', (u.who || {}).fab)}
             ${cell(u.paintComing + u.inPainting, u.paintComing ? `${u.paintComing} coming` : '', (u.who || {}).paint)}
             ${cell(u.arrived + u.notStarted + u.assembling, [u.assembling ? `${u.assembling} assembling` : '', u.arrived ? `${u.arrived} arrived` : ''].filter(Boolean).join('<br>'), (u.who || {}).asm)}
-            ${cell(u.godown, u.booked ? `${u.booked} booked` : '', (u.who || {}).booked)}</tr>`));
-        out.innerHTML = r.models.length ? `<div class="table-wrap"><table><thead><tr><th>Model no.</th><th>Unit</th><th class="num">🔩 Bending</th><th class="num">🏭 Fab</th><th class="num">🎨 Painting</th><th class="num">🛠️ Assembly</th><th class="num">🏬 Godown</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
+            ${cell(u.godown, u.booked ? `${u.booked} booked` : '', (u.who || {}).booked)}
+            <td class="num"><b>${tot(u)}</b></td></tr>`), sumRow(m)]);
+        out.innerHTML = r.models.length ? `<div class="table-wrap"><table><thead><tr><th>Model no.</th><th>Unit</th><th class="num">🔩 Bending</th><th class="num">🏭 Fab</th><th class="num">🎨 Painting</th><th class="num">🛠️ Assembly</th><th class="num">🏬 Godown</th><th class="num">Total</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
           : '<span class="muted">No machine of this model in fab, painting, assembly or godown.</span>';
       } catch (ex) { out.textContent = ex.message; }
     }, 300);
