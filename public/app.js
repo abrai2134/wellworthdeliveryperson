@@ -2984,7 +2984,7 @@ async function renderBendStaff() {
   const wrap = $app.querySelector('.wrap');
   wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(state.today || new Date().toISOString().slice(0, 10)))}</div><div class="big">🔩 Bending – ${r.isManager ? 'admin' : 'leader'}</div>
       <div class="line">${r.isManager ? `Give each machine to a bending leader. Bending leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : 'Tap ▶ Start when you begin a machine and ✓ Bending done when it is finished – it then goes to Fab.'}</div></div>
-    <div class="row section"><h2 style="margin:0">${r.isManager ? '🔩 Unit bending machines' : '🔩 My bending work'}</h2><div class="spacer"></div>${r.isLeader ? `<span class="badge w4">${r.items.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> ` : ''}<button class="primary small" id="bend-add">+ Machines for bending</button></div>
+    <div class="row section"><h2 style="margin:0">${r.isManager ? '🔩 Unit bending machines' : '🔩 My bending work'}</h2><div class="spacer"></div>${r.isLeader ? `<span class="badge w4">${r.items.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> ` : ''}${r.canAdd ? '<button class="primary small" id="bend-add">+ Machines for bending</button>' : ''}</div>
     ${fabSummaryHtml(r.items, r.isManager ? '/staff/bend/move' : null, 'bend')}
     ${r.items.length ? fabGrouped(r.items, who, 'bend') : '<div class="card muted">No bending machine right now.</div>'}
     <div class="card section"><div class="row"><h3 style="margin:0">✓ ${r.isManager ? 'Bending done' : 'My bending done'} – ${esc(r.month)}${r.myAmount !== null && r.myAmount !== undefined ? ` · <span class="badge ok">₹${r.myAmount}</span>` : ''}</h3><div class="spacer"></div><input type="month" id="bend-month" value="${esc(r.month)}" style="width:auto"></div>
@@ -3006,7 +3006,8 @@ async function renderBendStaff() {
     wrap.querySelectorAll('[data-co-edit]').forEach((b) => (b.onclick = () => coForm(r.companyPeople.find((x) => x.id === b.dataset.coEdit))));
   }
   bindFab(wrap, '/staff/bend', r.items, renderStaff, { leaders: r.unitLeaders }, 'bend');
-  document.getElementById('bend-add').onclick = fabAddForm('/staff/bend', renderStaff, r.units, r.unitId, 'bend');
+  const bendAdd = document.getElementById('bend-add');
+  if (bendAdd) bendAdd.onclick = fabAddForm('/staff/bend', renderStaff, r.units, r.unitId, 'bend');
   document.getElementById('bend-month').onchange = (e) => { state.bendMonth = e.target.value; renderStaff(); };
 }
 
@@ -3027,7 +3028,7 @@ async function adminBendHtml() {
   state.bendAdmin = r;
   state.bendWorkers = r.workers || [];
   const people = (role) => A().people.filter((p) => p.role === role);
-  const person = (p) => `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b> <span class="small muted">${esc(p.unitName || '')}</span> ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}</div><div class="sub-line small">${p.role === 'bendleader' ? `<span class="muted">${(r.leaders.find((l) => l.id === p.id) || { pending: 0 }).pending} pending</span>` : ''}<button class="link small" data-edit-fp="${esc(p.id)}">Edit</button></div></div>`;
+  const person = (p) => `<div class="drv"><div class="who-line"><b>${esc(p.name)}</b> <span class="small muted">${esc(p.unitName || '')}</span> ${p.canLogin ? '<span class="badge ok">can log in</span>' : '<span class="badge warn">no login PIN</span>'}</div><div class="sub-line small">${p.role === 'bendleader' ? `<span class="muted">${(r.leaders.find((l) => l.id === p.id) || { pending: 0 }).pending} pending</span>` : ''}${['bendleader', 'bendmanager'].includes(p.role) ? `<span class="badge ${p.canAddBend ? 'ok' : ''}">${p.canAddBend ? '+ can add machines' : 'cannot add'}</span><button class="link small" data-bend-addright="${esc(p.id)}|${p.canAddBend ? '' : '1'}">${p.canAddBend ? 'Stop adding' : 'Allow adding'}</button>` : ''}<button class="link small" data-edit-fp="${esc(p.id)}">Edit</button></div></div>`;
   return `<div class="row section"><h1 style="margin:0">🔩 Bending</h1><div class="spacer"></div><button class="primary" id="bend-add-a">+ Machines for bending</button></div>
     <div class="grid section">
       <div class="card"><div class="row"><h3 style="margin:0">🧑‍💼 Bending admins</h3><div class="spacer"></div><button class="small" id="bend-add-mgr">+ Add</button></div><div class="small muted">Log in with 🔩 Bending and give the unit's machines to bending leaders.</div>${people('bendmanager').map(person).join('') || '<div class="small muted">None yet.</div>'}</div>
@@ -3055,6 +3056,7 @@ function bindAdminBend(main) {
   bindFabRates(document.getElementById('bend-rates'), r.settings.contractorRates || [], '/admin/bend/settings', 'PUT', renderAdmin, [{ key: 'payrollLeader', label: 'Payroll leader ₹' }, { key: 'payroll', label: 'Payroll person ₹' }]);
   document.getElementById('bend-board-month').onchange = (e) => { state.bendBoardMonth = e.target.value; renderAdmin(); };
   document.getElementById('bend-add-co').onclick = () => personForm(null, null, 'bendcompany');
+  main.querySelectorAll('[data-bend-addright]').forEach((b) => (b.onclick = async () => { const [id, on] = b.dataset.bendAddright.split('|'); try { await api(`/admin/people/${id}/bend-add`, { method: 'PUT', body: { on: !!on } }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } }));
   document.getElementById('bend-set').onsubmit = async (e) => { e.preventDefault(); try { await api('/admin/bend/settings', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); toast('Saved'); renderAdmin(); } catch (ex) { toast(ex.message, true); } };
 }
 

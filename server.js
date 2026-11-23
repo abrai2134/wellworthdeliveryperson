@@ -238,6 +238,7 @@ function personView(p) {
     active: !!p.active,
     payType: p.payType || '',
     incentiveCut: p.incentiveCut || 0,
+    canAddBend: ['bendleader', 'bendmanager'].includes(p.role) ? bendCanAdd(p) : undefined,
   };
 }
 
@@ -943,6 +944,13 @@ admin.post('/people', (req, res) => {
   res.json({ ok: true });
 });
 
+admin.put('/people/:id/bend-add', (req, res) => {
+  const p = db().people.find((x) => x.id === req.params.id && !x.deleted && ['bendleader', 'bendmanager'].includes(x.role));
+  if (!p) return res.status(404).json({ error: 'Person not found' });
+  p.canAddBend = !!req.body.on;
+  store.save();
+  res.json({ ok: true });
+});
 admin.put('/people/:id', (req, res) => {
   const p = db().people.find((x) => x.id === req.params.id && !x.deleted);
   if (!p) return res.status(404).json({ error: 'Person not found' });
@@ -2441,6 +2449,8 @@ function bendStart(m, by, company, worker, leader) {
 }
 const bendView = (m) => ({ ...fabView(m), helper: null, byCompany: !!m.byCompany, companyWorker: m.companyWorker || '', companyLeader: m.companyLeader || '', bendAmount: m.bendAmount || 0 });
 const isBend = (p) => ['bendleader', 'bendmanager'].includes(p.role);
+// + Machines for bending: only logins the admin allowed (at first: pranali, abrar, bhagwan)
+function bendCanAdd(p) { return p.canAddBend !== undefined ? !!p.canAddBend : /pranali|abrar|bhagwan/i.test(`${p.name} ${p.username || ''}`); }
 app.get('/api/staff/bend', need('staff'), (req, res) => {
   migrateCompanyWorkers();
   const p = req.user.account;
@@ -2461,7 +2471,8 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })),
     items: db().bend.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(bendView),
     unitLeaders: bendPeople(p.unitId, 'bendleader'),
-    allLeaders: bendPeople(null, 'bendleader'), // ⇄ Move can go to another unit's bending leader
+    allLeaders: bendPeople(null, 'bendleader'),
+    canAdd: bendCanAdd(p), // ⇄ Move can go to another unit's bending leader
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
@@ -2473,6 +2484,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
 app.post('/api/staff/bend', need('staff'), (req, res) => {
   const p = req.user.account;
   if (!isBend(p)) return bad(res, 'Only bending leaders / bending admins can enter machines');
+  if (!bendCanAdd(p)) return bad(res, 'You are not allowed to add machines for bending – ask the admin');
   send(res, bendAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
 });
 // the bending leader for own machines; the bending admin for any machine of the unit
