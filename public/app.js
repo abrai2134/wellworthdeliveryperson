@@ -2600,7 +2600,7 @@ function fabSummaryHtml(items, moveUrl, kind = 'fab') {
   }
   const names = Object.keys(g).sort();
   if (!names.length) return '';
-  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">${r.leaderId ? '⇄ Move' : '👷 Give to ' + L.leader}</button>` : ''}${moveUrl.startsWith('/admin') ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
+  const rows = names.flatMap((n) => Object.entries(g[n]).map(([model, r], i) => `<tr>${i === 0 ? `<td rowspan="${Object.keys(g[n]).length}"><b>${esc(n)}</b><div class="small muted">Total: <b>${Object.values(g[n]).reduce((t, x) => t + x.given + x.started, 0)}</b></div></td>` : ''}<td>${esc(model)}</td><td class="num"><b>${r.given + r.started}</b></td><td class="num">${r.given || ''}</td><td class="num">${r.started || ''}</td>${moveUrl ? `<td class="nowrap">${r.given ? `<button class="small nowrap" data-fab-move="${esc(moveUrl)}|${esc(r.leaderId)}|${esc(r.unitId)}|${r.given}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">${r.leaderId ? '⇄ Move' : '👷 Give to ' + L.leader}</button>` : ''}${moveUrl.startsWith('/admin') ? ` <button class="small nowrap" data-fab-correct="${esc(r.leaderId)}|${esc(r.unitId)}|${r.given + r.started}" data-model="${esc(model)}" data-name="${esc(n)}" data-kind="${kind}">✎ Correct</button>` : ''}</td>` : ''}</tr>`));
   const allText = names.map((n) => fabShareText(`${L.Name} – ${n}`, items.filter((m) => ((m.unitName ? m.unitName + ' – ' : '') + (m.leader ? m.leader.name : '⏳ Waiting')) === n), kind)).join('\n\n');
   return `<div class="card section"><div class="row"><h3 style="margin:0">📦 ${L.Name} – given to each ${L.leader}</h3><div class="spacer"></div>${shareButtons(allText)}</div><div style="margin-top:8px"></div><div class="table-wrap"><table><thead><tr><th>${L.Leader}</th><th>Model no.</th><th class="num">Qty</th><th class="num">Not started</th><th class="num">${L.inWork}</th>${moveUrl ? '<th></th>' : ''}</tr></thead><tbody>${rows.join('')}</tbody></table></div></div>`;
 }
@@ -2615,7 +2615,10 @@ function fabAddForm(url, reload, units, myUnit, kind = 'fab') {
       <label>Note</label><input name="note" placeholder="optional">
       <p class="muted small">Each machine goes to the ${L.leader} <b>of that unit</b> with the fewest machines open${L.helper ? ', with one fab helper of that unit' : ''}. When ${L.name} is done it goes to ${L.next}.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Add</button></div>`,
-    async (fd) => { if (!fd.get('unitId')) throw new Error('Choose the unit'); await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload(); });
+    async (fd) => { if (!fd.get('unitId')) throw new Error('Choose the unit'); const r = await api(url, { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – machines given out'); reload();
+      if (r && r.given) setTimeout(() => openModal(`<h2>✓ Added – given to</h2><div class="muted">⚙️ ${esc(r.model)} × ${r.qty} · ${esc(r.unitName || '')}</div>
+        <div style="margin-top:8px">${Object.entries(r.given).map(([n, c]) => `<div class="row" style="padding:4px 0;border-bottom:1px solid #eee"><b>${n.startsWith('⏳') ? '' : '👷 '}${esc(n)}</b><div class="spacer"></div><span class="godown-qty">${c}</span></div>`).join('')}</div>
+        <div class="actions"><button class="primary" value="ok">OK</button></div>`, async () => {}), 300); });
   };
 }
 function bindFab(root, base, items, reload, people, kind = 'fab') {
@@ -2990,6 +2993,7 @@ async function renderBendStaff() {
   wrap.innerHTML = `<div class="hero"><div class="label">Today · ${esc(fmtDate(state.today || new Date().toISOString().slice(0, 10)))}</div><div class="big">🔩 Bending – ${r.isManager ? 'admin' : 'leader'}</div>
       <div class="line">${r.isManager ? `Give each machine to a bending leader. Bending leaders: ${r.unitLeaders.map((l) => `${esc(l.name)} (${l.pending} pending)`).join(' · ') || 'none'}` : 'Tap ▶ Start when you begin a machine and ✓ Bending done when it is finished – it then goes to Fab.'}</div></div>
     <div class="row section"><h2 style="margin:0">${r.isManager ? '🔩 Unit bending machines' : '🔩 My bending work'}</h2><div class="spacer"></div>${r.isLeader ? `<span class="badge w4">${r.items.filter((m) => m.leader && m.leader.id === state.me.id).length} / ${r.maxPending} pending</span> ` : ''}${r.canAdd ? '<button class="primary small" id="bend-add">+ Machines for bending</button>' : ''}</div>
+    ${bendRecentHtml(r.recent)}
     ${fabSummaryHtml(r.items, r.isManager ? '/staff/bend/move' : null, 'bend')}
     ${r.items.length ? fabGrouped(r.items, who, 'bend') : '<div class="card muted">No bending machine right now.</div>'}
     <div class="card section"><div class="row"><h3 style="margin:0">✓ ${r.isManager ? 'Bending done' : 'My bending done'} – ${esc(r.month)}${r.myAmount !== null && r.myAmount !== undefined ? ` · <span class="badge ok">₹${r.myAmount}</span>` : ''}</h3><div class="spacer"></div><input type="month" id="bend-month" value="${esc(r.month)}" style="width:auto"></div>
@@ -3016,6 +3020,14 @@ async function renderBendStaff() {
   document.getElementById('bend-month').onchange = (e) => { state.bendMonth = e.target.value; renderStaff(); };
 }
 
+// 🕒 Machines entered for bending (7 days): when, by whom, given to whom
+function bendRecentHtml(list) {
+  if (!(list || []).length) return '';
+  return `<details class="card section"><summary><b>🕒 Machines entered – last 7 days (${list.length})</b> <span class="small muted">· when, by whom, given to whom</span></summary>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>When</th><th>Entered by</th><th>Model no.</th><th>Unit</th><th class="num">Qty</th><th>Given to</th></tr></thead><tbody>
+    ${list.map((x) => `<tr><td class="small">${esc(fmtTime(x.at))}</td><td>${esc(x.by)}</td><td>${esc(x.model)}</td><td>${esc(x.unitName)}</td><td class="num"><b>${x.qty}</b></td><td class="small">${Object.entries(x.given).map(([n, c]) => `${esc(n)} × ${c}`).join('<br>')}</td></tr>`).join('')}
+    </tbody></table></div></details>`;
+}
 // Company bending employee: their bending by company this month and the incentive
 function renderBendCompany(r) {
   const wrap = $app.querySelector('.wrap');
@@ -3047,7 +3059,7 @@ async function adminBendHtml() {
       </tbody></table></div><div class="small muted" style="margin-top:4px">The leader earns the model's bending rate for each machine started with ▶ Start and marked Bending done; machines started with 🏢 Start by company earn nothing.</div></div>
     <form class="card section" id="bend-rates">${fabRatesFormHtml(await loadMachineList()).replace('💰 Fab contractor rate per model', '💰 Bending rate per model').replace('Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.', '<b>Contractor ₹</b>: paid to the bending leader for each machine finished in bending. <b>Payroll leader ₹</b> and <b>Payroll person ₹</b>: incentive for the company team leader and the company person when the bending is done by the company (🏢 Start by company).')}</form>
     ${r.companyBoard.length ? `<div class="card section"><h2 style="margin:0">🏢 Bending by company employees – ${esc(r.month)}</h2><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Employee</th><th>Unit</th><th class="num">As team leader</th><th class="num">As person</th><th class="num">Incentive</th></tr></thead><tbody>${r.companyBoard.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.unitName)}</td><td class="num">${x.asLeader || '—'}${x.asLeader ? ` <span class="small muted">₹${x.leaderAmount}</span>` : ''}</td><td class="num">${x.asPerson || '—'}${x.asPerson ? ` <span class="small muted">₹${x.personAmount}</span>` : ''}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}</tbody></table></div></div>` : ''}
-    <div id="bend-list">${fabSummaryHtml(r.items, '/admin/bend/move', 'bend')}${fabGrouped(r.items, 'admin', 'bend')}
+    ${bendRecentHtml(r.recent)}<div id="bend-list">${fabSummaryHtml(r.items, '/admin/bend/move', 'bend')}${fabGrouped(r.items, 'admin', 'bend')}
     ${r.done.length ? `<details class="card" style="margin-top:12px"><summary><b>✓ Bending done – last 30 days (${r.done.length})</b></summary><div class="done-list" style="margin-top:8px">${r.done.map((m) => fabRow(m, 'admin', 'bend')).join('')}</div></details>` : ''}</div>
     <hr style="margin:24px 0">`;
 }

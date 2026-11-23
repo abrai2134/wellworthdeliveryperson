@@ -2314,6 +2314,20 @@ function refreshBendAmounts() {
     if (r > 0) { m.bendRate = r; m.bendAmount = r; }
   }
 }
+// Machines entered for bending in the last 7 days: when, by whom, and to whom they were given
+function bendRecent(unitId) {
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const g = {};
+  for (const m of db().bend) {
+    if ((m.createdAt || '') < since || (unitId && m.unitId !== unitId) || m.status === 'cancelled') continue;
+    const k = [m.createdAt.slice(0, 16), m.createdBy || '', m.model, m.unitId].join('|');
+    const x = (g[k] ||= { at: m.createdAt, by: m.createdBy || '', model: m.model, unitName: unitName(m.unitId), qty: 0, given: {} });
+    x.qty++;
+    const n = m.leaderId ? personName(m.leaderId) || '?' : '⏳ waiting';
+    x.given[n] = (x.given[n] || 0) + 1;
+  }
+  return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 60);
+}
 function bendBoard(month) {
   const done = db().bend.filter((m) => m.status === 'done' && (m.completedAt || '').slice(0, 7) === month);
   return db().people.filter((p) => p.role === 'bendleader' && !p.deleted).map((p) => {
@@ -2367,10 +2381,14 @@ function bendAdd(body, by, creator) {
   const qty = parseInt(body.qty, 10);
   if (!(qty >= 1 && qty <= 50)) return { error: 'Quantity must be 1 to 50' };
   const now = new Date().toISOString();
-  for (let i = 0; i < qty; i++) db().bend.push({ id: newId('bnd'), unitId: unit.id, model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) });
+  const made = [];
+  for (let i = 0; i < qty; i++) { const m = { id: newId('bnd'), unitId: unit.id, model, status: 'waiting', createdAt: now, createdBy: by, creator, note: str(body.note, 200) }; db().bend.push(m); made.push(m); }
   bendAssign();
   store.save();
-  return { value: { id: '' } };
+  // to whom they were given (shown right after Add)
+  const given = {};
+  for (const m of made) { const n = m.leaderId ? personName(m.leaderId) || '?' : '⏳ waiting (leaders full)'; given[n] = (given[n] || 0) + 1; }
+  return { value: { id: '', model, qty, unitName: unit.name, given } };
 }
 function bendDone(m, body, by) {
   if (!FAB.PENDING.includes(m.status)) return { error: 'This machine is not in bending' };
@@ -2472,6 +2490,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     items: db().bend.filter((m) => FAB.OPEN.includes(m.status) && (mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(bendView),
     unitLeaders: bendPeople(p.unitId, 'bendleader'),
     allLeaders: bendPeople(null, 'bendleader'),
+    recent: manager || bendCanAdd(p) ? bendRecent(manager ? p.unitId : null).filter((x) => manager || x.by === p.name) : [],
     canAdd: bendCanAdd(p), // ⇄ Move can go to another unit's bending leader
     maxPending: FAB.settings(db(), 'bend').maxPending,
     month,
@@ -2485,7 +2504,9 @@ app.post('/api/staff/bend', need('staff'), (req, res) => {
   const p = req.user.account;
   if (!isBend(p)) return bad(res, 'Only bending leaders / bending admins can enter machines');
   if (!bendCanAdd(p)) return bad(res, 'You are not allowed to add machines for bending – ask the admin');
-  send(res, bendAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id }));
+  const r = bendAdd({ ...req.body, unitId: str(req.body.unitId) || p.unitId }, p.name, { role: 'staff', id: p.id });
+  if (r.error) return bad(res, r.error);
+  res.json({ ok: true, ...r.value });
 });
 // the bending leader for own machines; the bending admin for any machine of the unit
 const bendMayWork = (req) => (x) => x.leaderId === req.user.id || (req.user.account.role === 'bendmanager' && x.unitId === req.user.account.unitId);
@@ -2535,10 +2556,11 @@ admin.get('/bend', (req, res) => {
     month: monthOf(req.query.month),
     board: bendBoard(monthOf(req.query.month)),
     companyBoard: bendCompanyBoard(monthOf(req.query.month)),
+    recent: bendRecent(null),
     workers: bendWorkers(),
   });
 });
-admin.post('/bend', (req, res) => send(res, bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' })));
+admin.post('/bend', (req, res) => { const r = bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' }); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
 admin.post('/bend/move', (req, res) => { const r = bendMove(req.body, 'admin'); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
 admin.post('/bend/:id/start', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendStart(m, 'admin', req.body.company, req.body.worker, req.body.leader)); });
 admin.post('/bend/:id/done', (req, res) => { const m = bendFind(req, res); if (m) send(res, bendDone(m, req.body, 'admin')); });
