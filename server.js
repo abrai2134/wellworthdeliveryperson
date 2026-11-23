@@ -2568,7 +2568,7 @@ function paintingView() {
   const group = (list) => Object.values(list.reduce((o, x) => {
     const mk = ASM.exactKey(x.model); // same model even if spaces / case differ
     const gm = (o[mk] ||= { model: x.model, qty: 0, oldest: x.inAt || x.createdAt, units: {}, entries: {} });
-    const e = entry(x); const k = e.text + '|' + e.at; (gm.entries[k] ||= { ...e, qty: 0 }).qty++;
+    const e = entry(x); const k = e.text + '|' + e.at; const ge = (gm.entries[k] ||= { ...e, qty: 0, ids: [] }); ge.qty++; ge.ids.push(x.id);
     gm.qty++; if (x.unitId) gm.units[x.unitId] = (gm.units[x.unitId] || 0) + 1; const t = x.inAt || x.createdAt; if (t < gm.oldest) gm.oldest = t; return o; }, {}))
     .map((g) => ({ ...g, entries: Object.values(g.entries).sort((a, b) => b.at.localeCompare(a.at)) }))
     .sort((a, b) => a.model.localeCompare(b.model));
@@ -2605,8 +2605,10 @@ function paintingView() {
 const painterName = (req) => (req.user.role === 'admin' ? 'admin' : req.user.account.name);
 function paintIn(body, by) {
   const model = str(body.model, 120);
-  const qty = parseInt(body.qty, 10);
-  const list = db().painting.filter((x) => x.status === 'coming' && ASM.sameRate(x.model, model)).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  // chosen machines (which vendor / whose fab work came in), else the oldest ones
+  const ids = Array.isArray(body.ids) ? body.ids.map((x) => str(x, 40)) : null;
+  const qty = ids ? ids.length : parseInt(body.qty, 10);
+  const list = db().painting.filter((x) => x.status === 'coming' && ASM.sameRate(x.model, model) && (!ids || ids.includes(x.id))).sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
   if (qty > list.length) return { error: `Only ${list.length} of this model are still coming from fab – the others were already taken ⬇ In (page was out of date). The list is refreshed – check and try again.` };
   if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };

@@ -2697,7 +2697,7 @@ function paintingHtml(v) {
     return `🎨 *${title}* (${fmtDate(state.today || new Date().toISOString().slice(0, 10))})\n` + list.map((x) => `• ${x.model} × ${x.qty}${vend(x.model) ? ` – ${vend(x.model)}` : ''}`).join('\n') + `\nTotal: ${list.reduce((t, x) => t + x.qty, 0)}`;
   };
   return vendorCard + `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span>${v.coming.length ? shareButtons(shareOf('Coming from fab', v.coming, 'coming')) : ''}${isAdm ? '<button class="small" id="paint-add-coming">+ Add</button>' : ''}</div>
-      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="coming|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="coming|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}" data-k="${esc(x.model)}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="coming|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="coming|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting (Ready at Well Worth)</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span>${v.inPainting.length ? shareButtons(shareOf('In painting (Ready at Well Worth)', v.inPainting, 'in')) : ''}</div>
       <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `${v.canOut === false ? '' : `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`}` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="in|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="in|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
     ${v.history.length ? `<div class="card section"><h2>Painting in / out (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th></th><th>Model no.</th><th class="num">Qty</th><th>By</th><th></th></tr></thead><tbody>
@@ -2706,10 +2706,20 @@ function paintingHtml(v) {
 function bindPainting(root, v, reload) {
   root.querySelectorAll('[data-paint-in]').forEach((b) => (b.onclick = () => {
     const [model, max] = b.dataset.paintIn.split('|');
+    const g = (v.coming || []).find((x) => x.model === model) || { entries: [] };
+    // one line per vendor / unit – fab leader / time: how many of these came in
     openModal(`<h2>⬇ Into painting</h2><div class="muted">⚙️ ${esc(model)} · ${max} coming from fab</div>
-      <label>How many came in? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="${esc(max)}" required>
+      <p class="small muted" style="margin:8px 0 4px">Which ones came in? (vendor, unit – whose fab work, when)</p>
+      ${g.entries.map((e, i) => `<div class="row" style="flex-wrap:nowrap;gap:8px;margin-top:6px;align-items:center"><div class="small" style="flex:1">${esc(e.text)}${e.at ? ` · 🕒 ${esc(fmtTime(e.at + ':00Z'))}` : ''} <b>(${e.qty})</b></div><input name="q${i}" type="number" min="0" max="${e.qty}" value="${e.qty}" style="width:80px"></div>`).join('')}
+      <div class="small" style="margin-top:8px">Total: <b id="pin-total">${max}</b></div>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬇ In</button></div>`,
-    async (fd) => { try { await api('/painting/in', { method: 'POST', body: { model, qty: fd.get('qty') } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Taken into painting'); reload(); });
+    async (fd) => {
+      const ids = g.entries.flatMap((e, i) => (e.ids || []).slice(0, Math.max(0, Math.min(e.qty, Number(fd.get('q' + i)) || 0))));
+      if (!ids.length) throw new Error('Enter how many came in');
+      try { await api('/painting/in', { method: 'POST', body: { model, ids } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast(`${ids.length} taken into painting`); reload();
+    });
+    const upd = () => { const t = g.entries.reduce((s2, e, i) => s2 + Math.max(0, Math.min(e.qty, Number((modalBody.querySelector(`[name=q${i}]`) || {}).value) || 0)), 0); const el = modalBody.querySelector('#pin-total'); if (el) el.textContent = t; };
+    modalBody.querySelectorAll('input[type=number]').forEach((x) => (x.oninput = upd));
   }));
   root.querySelectorAll('[data-paint-out]').forEach((b) => (b.onclick = () => {
     const [model, max, unit] = b.dataset.paintOut.split('|');
