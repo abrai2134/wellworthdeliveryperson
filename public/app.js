@@ -3037,7 +3037,7 @@ function bindFabRates(form, rates, url, method, reload, extra) {
   const collect = () => [...frRows.querySelectorAll('.fr-row')].map((d) => ({ model: d.querySelector('.fr-m').value, rate: d.querySelector('.fr-r').value, ...xVals(d) })).filter((x) => x.model.trim());
   if (url) form.onsubmit = async (e) => {
     e.preventDefault();
-    try { await api(url, { method, body: { contractorRates: collect() } }); toast('Fab rates saved'); reload(); } catch (ex) { toast(ex.message, true); }
+    try { await api(url, { method, body: { contractorRates: collect() } }); toast(url.includes('/bend') ? 'Bending rates saved' : 'Fab rates saved'); reload(); } catch (ex) { toast(ex.message, true); }
   };
   return collect;
 }
@@ -3122,6 +3122,9 @@ async function adminBendHtml() {
       <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>#</th><th>Bending leader</th><th class="num">Bending done</th><th class="num">By company</th><th class="num">Bending amount</th></tr></thead><tbody>
       ${r.board.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b><div class="small muted">${esc(x.unitName)}</div></td><td class="num"><b>${x.done}</b></td><td class="num">${x.byCompany || '—'}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No bending leader yet.</td></tr>'}
       </tbody></table></div><div class="small muted" style="margin-top:4px">The leader earns the model's bending rate for each machine started with ▶ Start and marked Bending done; machines started with 🏢 Start by company earn nothing.</div></div>
+    ${(r.missingRates || []).length ? `<div class="card section" style="border-color:#f3c0c0"><b>⚠ Bending done this month with no rate – ₹0 until the rate is added</b>
+      <div class="small muted">Add these <b>exact</b> model names (pick from the list) in 💰 Bending rate per model below, fill the column shown, and press Save rates – the amounts are then filled in automatically.</div>
+      <ul class="small" style="margin:6px 0 0 18px">${r.missingRates.map((x) => `<li><b>${esc(x.model)}</b> × ${x.qty} – needs ${x.need.map(esc).join(', ')}</li>`).join('')}</ul></div>` : ''}
     <form class="card section" id="bend-rates">${fabRatesFormHtml(await loadMachineList()).replace('💰 Fab contractor rate per model', '💰 Bending rate per model').replace('Paid to a <b>Contractor</b> fab leader for each machine finished in fab. Machines can be entered for fab only if their exact model name is in this list.', '<b>Contractor ₹</b>: paid to the bending leader for each machine finished in bending. <b>Payroll leader ₹</b> and <b>Payroll person ₹</b>: incentive for the company team leader and the company person when the bending is done by the company (🏢 Start by company).')}</form>
     ${r.companyBoard.length ? `<div class="card section"><h2 style="margin:0">🏢 Bending by company employees – ${esc(r.month)}</h2><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Employee</th><th>Unit</th><th class="num">As team leader</th><th class="num">As person</th><th class="num">Incentive</th></tr></thead><tbody>${r.companyBoard.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.unitName)}</td><td class="num">${x.asLeader || '—'}${x.asLeader ? ` <span class="small muted">₹${x.leaderAmount}</span>` : ''}</td><td class="num">${x.asPerson || '—'}${x.asPerson ? ` <span class="small muted">₹${x.personAmount}</span>` : ''}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}</tbody></table></div></div>` : ''}
     ${bendRecentHtml(r.recent)}<div id="bend-list">${fabSummaryHtml(r.items, '/admin/bend/move', 'bend')}${fabGrouped(r.items, 'admin', 'bend')}

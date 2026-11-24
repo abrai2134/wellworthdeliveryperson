@@ -2438,6 +2438,20 @@ const bendWorkers = (unitId) => [...new Set(companyPeople(unitId, 'bendcompany')
 const bendCoLeaders = (unitId) => [...new Set(companyPeople(unitId, 'bendcoleader').filter((p) => p.active).map((p) => p.name))].sort();
 const coPersonView = (p) => ({ id: p.id, name: p.name, phone: p.phone || '', username: p.username || '', unitId: p.unitId || '', unitName: unitName(p.unitId), active: !!p.active, canLogin: !!p.passHash, role: p.role });
 // company (payroll) employees who did bending: machines and their bending incentive
+// Bending done this month whose model has no rate (exact model name) – shown as a warning
+function bendMissingRates(month) {
+  const out = {};
+  for (const m of db().bend) {
+    if (m.status !== 'done' || (m.completedAt || '').slice(0, 7) !== month) continue;
+    const r = bendRates().find((x) => ASM.sameRate(x.model, m.model));
+    const need = m.byCompany ? [m.companyLeader && !(r && Number(r.payrollLeader) > 0) ? 'Payroll leader ₹' : '', !(r && Number(r.payroll) > 0) ? 'Payroll person ₹' : ''].filter(Boolean)
+      : m.leaderId && !(r && Number(r.rate) > 0) ? ['Contractor ₹'] : [];
+    if (!need.length) continue;
+    const x = (out[m.model] ||= { model: m.model, qty: 0, need: new Set() });
+    x.qty++; need.forEach((n) => x.need.add(n));
+  }
+  return Object.values(out).map((x) => ({ ...x, need: [...x.need] })).sort((a, b) => a.model.localeCompare(b.model));
+}
 function bendCompanyBoard(month) {
   const g = {};
   for (const m of db().bend) {
@@ -2637,6 +2651,7 @@ admin.get('/bend', (req, res) => {
     month: monthOf(req.query.month),
     board: bendBoard(monthOf(req.query.month)),
     companyBoard: bendCompanyBoard(monthOf(req.query.month)),
+    missingRates: bendMissingRates(monthOf(req.query.month)),
     recent: bendRecent(null),
     workers: bendWorkers(),
     coLeaders: bendCoLeaders(),
