@@ -2111,7 +2111,7 @@ async function adminAssembly(main) {
   document.getElementById('af-unit').onchange = (e) => { state.asmFilter = { ...f, unit: e.target.value }; adminAssembly(main); };
   document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
-  api('/admin/godown').then((g) => { state.loaderNames = g.loaderNames || []; }).catch(() => {});
+  api('/admin/godown').then((g) => { state.loaderNames = g.loaderNames || []; state.loaderOrder = g.loaderOrder || []; }).catch(() => {});
   bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
   document.getElementById('add-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
   api('/dispatch/board').then((b) => {
@@ -2129,17 +2129,7 @@ async function adminAssembly(main) {
     async (fd) => { await api('/admin/dispatchers', { method: 'POST', body: Object.fromEntries(fd) }); toast('Dispatch login added'); renderAdmin(); });
   const dsp = (id) => r.dispatchers.find((d) => d.id === id);
   // dispatch incentive reduction % for this dispatch login (0 = none)
-  // 🏋️ Shilphata loaders list (names offered in the Send box)
-  const drawLoaders = (list) => {
-    const card = document.getElementById('loader-list-card'); if (!card) return;
-    card.innerHTML = `<h2 style="margin:0">🏋️ Shilphata loaders</h2><div class="small muted">Names offered in the 🚚 Send box when machines go to a client from Shilphata.</div>
-      <div style="margin:8px 0">${list.map((n, i) => `<span class="badge" style="margin:2px">${esc(n)} <button class="link danger small" data-ld-del="${i}">✕</button></span>`).join('') || '<span class="small muted">No names yet.</span>'}</div>
-      <form id="ld-add" class="row" style="gap:6px"><input name="name" placeholder="Loader name" required style="flex:1"><button class="primary small">+ Add</button></form>`;
-    const save = async (names) => { try { await api('/admin/loaders', { method: 'PUT', body: { names } }); toast('Saved'); drawLoaders(names); } catch (ex) { toast(ex.message, true); } };
-    card.querySelector('#ld-add').onsubmit = (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) save([...list, n]); };
-    card.querySelectorAll('[data-ld-del]').forEach((b) => (b.onclick = () => { if (confirm('Remove this loader from the list?')) save(list.filter((_, i) => i !== +b.dataset.ldDel)); }));
-  };
-  api('/admin/godown').then((g) => drawLoaders(g.loaderList || [])).catch(() => {});
+  api('/admin/godown').then((g) => loaderListCard(document.getElementById('loader-list-card'), g.loaderList || [], '/admin/loaders', g.loaderOrder || [])).catch(() => {});
   main.querySelectorAll('[data-dsp-cut]').forEach((b) => (b.onclick = async () => {
     const [id, cur] = b.dataset.dspCut.split('|');
     const v = prompt('Dispatch incentive reduction % for this login (0 = no reduction)', cur);
@@ -2483,7 +2473,12 @@ function bindSend(root, url, units, reload) {
     const ln = modalBody.querySelector('#s-ln');
     if (ln) ln.onchange = () => {
       const box = modalBody.querySelector('#s-lnames'); const old = [...box.querySelectorAll('.s-loader')].map((x) => x.value);
-      box.innerHTML = Array.from({ length: Number(ln.value) }, (_, i) => `<input class="s-loader" list="s-loader-list" placeholder="Loader ${i + 1} name" value="${esc(old[i] || '')}" style="margin-top:6px">`).join('');
+      // filled automatically in rotation (fair for all); can be changed
+      const order = (state.loaderOrder || []).map((x) => x.name);
+      const pickN = (n) => { const out = old.filter(Boolean).slice(0, n); for (const nm of order) { if (out.length >= n) break; if (!out.some((o) => o.toUpperCase() === nm.toUpperCase())) out.push(nm); } return out; };
+      const fill = pickN(Number(ln.value));
+      box.innerHTML = Array.from({ length: Number(ln.value) }, (_, i) => `<input class="s-loader" list="s-loader-list" placeholder="Loader ${i + 1} name" value="${esc(fill[i] || '')}" style="margin-top:6px">`).join('')
+        + (order.length ? '<div class="small muted" style="margin-top:4px">Names are filled in turn (fewest loading days this month first) – change if someone else loaded.</div>' : '');
     };
     const getPhotos = photoPicker(document.getElementById('s-photos'));
     modalBody.querySelectorAll('[name=entryIdx]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; if (Number(q.value) > e.qty) q.value = e.qty; }));
@@ -2503,6 +2498,18 @@ function bindSend(root, url, units, reload) {
   }));
 }
 
+// 🏋️ Shilphata loaders list (admin + Dispatch logins): names in the Send box, with rotation order
+function loaderListCard(card, list, url, order) {
+  if (!card) return;
+  card.hidden = false;
+  const days = Object.fromEntries((order || []).map((x) => [x.name.toUpperCase(), x]));
+  card.innerHTML = `<h2 style="margin:0">🏋️ Shilphata loaders</h2><div class="small muted">Names filled in the 🚚 Send box in turn (fewest loading days this month first).</div>
+    <div style="margin:8px 0">${list.map((n, i) => { const d = days[n.toUpperCase()]; return `<span class="badge" style="margin:2px">${esc(n)}${d ? ` <span class="muted">· ${d.days} day${d.days === 1 ? '' : 's'}${d.today ? ' · today' : ''}</span>` : ''} <button class="link danger small" data-ld-del="${i}">✕</button></span>`; }).join('') || '<span class="small muted">No names yet.</span>'}</div>
+    <form class="row ld-add" style="gap:6px"><input name="name" placeholder="Loader name" required style="flex:1"><button class="primary small">+ Add</button></form>`;
+  const save = async (names) => { try { await api(url, { method: 'PUT', body: { names } }); toast('Saved'); render(); } catch (ex) { toast(ex.message, true); } };
+  card.querySelector('.ld-add').onsubmit = (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) save([...list, n]); };
+  card.querySelectorAll('[data-ld-del]').forEach((b) => (b.onclick = () => { if (confirm('Remove this loader from the list?')) save(list.filter((_, i) => i !== +b.dataset.ldDel)); }));
+}
 // 🏋️ Loading incentive (Shilphata client dispatch)
 function loaderBoardHtml(r) {
   if (!r || !(r.trips || []).length) return '';
@@ -2555,11 +2562,13 @@ async function renderDispatch() {
       <div class="big">₹${r.me.incentive} incentive</div>
       <div class="line">🚚 ${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients: <b>₹${r.me.clientIncentive}</b></div>
       <div class="line">🔁 ${r.me.toBonusUnit} sent to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')}: <b>₹${r.me.unitBonus}</b> transfer bonus</div></div>
-    ${godownHtml(r.stock, true)}<div id="dsp-loaders"></div>${dispatchBoardHtml(r.board, r.month, true, 'To ' + ((r.bonusUnitNames || []).join(' / ') || 'bonus unit'))}${historyHtml(r.history)}`;
+    ${godownHtml(r.stock, true)}<div class="card section" id="dsp-loader-list" hidden></div><div id="dsp-loaders"></div>${dispatchBoardHtml(r.board, r.month, true, 'To ' + ((r.bonusUnitNames || []).join(' / ') || 'bonus unit'))}${historyHtml(r.history)}`;
   const mi = document.getElementById('dsp-month');
   if (mi) mi.onchange = (e) => { state.dspMonth = e.target.value; renderDispatch(); };
   state.loaderNames = r.loaderNames || [];
+  state.loaderOrder = r.loaderOrder || [];
   bindSend(wrap, '/dispatch/send', r.units, renderDispatch);
+  if ((r.loaderUnits || []).length) loaderListCard(document.getElementById('dsp-loader-list'), r.loaderList || [], '/dispatch/loaders', r.loaderOrder || []);
   api('/dispatch/loaders' + (state.dspMonth ? '?month=' + state.dspMonth : '')).then((lb) => { const el = document.getElementById('dsp-loaders'); if (el) el.innerHTML = loaderBoardHtml(lb); }).catch(() => {});
 }
 

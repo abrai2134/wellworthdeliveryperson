@@ -2008,6 +2008,8 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
     bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
     loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id),
     loaderNames: loaderNames(),
+    loaderList: db().settings.loaders || [],
+    loaderOrder: loaderOrder(),
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
@@ -2078,13 +2080,38 @@ function loaderNames() {
   for (const m of db().assembly) for (const n of m.loaders || []) set.set(n.toUpperCase(), n);
   return [...set.values()].sort();
 }
-// Admin: list of Shilphata loaders (offered in the Send box)
-admin.put('/loaders', (req, res) => {
+// List of Shilphata loaders (offered in the Send box) – kept by the admin and the Dispatch logins
+function saveLoaders(req, res) {
   db().settings.loaders = [...new Map((Array.isArray(req.body.names) ? req.body.names : []).map((n) => str(n, 60)).filter(Boolean).map((n) => [n.toUpperCase(), n])).values()].slice(0, 200);
   store.save();
-  res.json({ ok: true });
-});
-admin.get('/godown', (req, res) => res.json({ loaderList: db().settings.loaders || [], loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id), loaderNames: loaderNames(), stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
+  res.json({ ok: true, names: db().settings.loaders });
+}
+admin.put('/loaders', saveLoaders);
+app.put('/api/dispatch/loaders', need('dispatch'), saveLoaders);
+// Fair rotation: today's loaders first (already counted for today), then whoever loaded on the
+// fewest days this month, then whoever loaded longest ago.
+function loaderOrder() {
+  const tz = db().settings.timezone || 'Asia/Kolkata';
+  const dayOf = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+  const today = todayIn(tz);
+  const month = today.slice(0, 7);
+  const days = {}; const last = {}; const todayN = {};
+  for (const m of db().assembly) {
+    if (m.location !== 'dispatched' || !(m.loaders || []).length || !m.dispatchedAt) continue;
+    const d = dayOf(m.dispatchedAt);
+    for (const n of m.loaders) {
+      const k = n.toUpperCase();
+      if (d.slice(0, 7) === month) (days[k] ||= new Set()).add(d);
+      if (!last[k] || d > last[k]) last[k] = d;
+      if (d === today) todayN[k] = true;
+    }
+  }
+  const names = (db().settings.loaders || []).length ? db().settings.loaders : loaderNames();
+  return names.map((n) => ({ name: n, k: n.toUpperCase() }))
+    .sort((a, b) => (todayN[b.k] ? 1 : 0) - (todayN[a.k] ? 1 : 0) || (days[a.k] ? days[a.k].size : 0) - (days[b.k] ? days[b.k].size : 0) || (last[a.k] || '').localeCompare(last[b.k] || '') || a.name.localeCompare(b.name))
+    .map((x) => ({ name: x.name, days: days[x.k] ? days[x.k].size : 0, today: !!todayN[x.k] }));
+}
+admin.get('/godown', (req, res) => res.json({ loaderList: db().settings.loaders || [], loaderOrder: loaderOrder(), loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id), loaderNames: loaderNames(), stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 
 // Old stock already lying in a unit's godown (before this app): added straight to the godown,
