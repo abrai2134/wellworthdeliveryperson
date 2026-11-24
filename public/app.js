@@ -2073,6 +2073,7 @@ async function adminAssembly(main) {
     <div class="row no-print" style="margin-bottom:-6px"><div class="spacer"></div><button class="small" id="add-stock">📦 Add old stock</button></div>
     ${godownHtml(r.stock, true)}
     <div id="adm-dsp-board"></div>
+    <div class="card section" id="loader-list-card"></div>
     <div class="card section"><div class="row"><h2 style="margin:0">🚚 Dispatch logins</h2><div class="spacer"></div><button class="small primary" id="dsp-add">+ Add dispatch login</button></div>
       <div class="small muted">They log in with the 🚚 Dispatch button, see every unit's godown stock and send machines to another unit or to a client.</div>
       ${r.dispatchers.length ? r.dispatchers.map((d) => `<div class="drv"><div class="who-line"><b>${esc(d.name)}</b> <code>${esc(d.username)}</code>${d.active ? '' : ' <span class="badge">inactive</span>'}${d.incentiveCut ? ` <span class="badge bad">−${d.incentiveCut}% incentive</span>` : ''}</div>
@@ -2128,6 +2129,17 @@ async function adminAssembly(main) {
     async (fd) => { await api('/admin/dispatchers', { method: 'POST', body: Object.fromEntries(fd) }); toast('Dispatch login added'); renderAdmin(); });
   const dsp = (id) => r.dispatchers.find((d) => d.id === id);
   // dispatch incentive reduction % for this dispatch login (0 = none)
+  // 🏋️ Shilphata loaders list (names offered in the Send box)
+  const drawLoaders = (list) => {
+    const card = document.getElementById('loader-list-card'); if (!card) return;
+    card.innerHTML = `<h2 style="margin:0">🏋️ Shilphata loaders</h2><div class="small muted">Names offered in the 🚚 Send box when machines go to a client from Shilphata.</div>
+      <div style="margin:8px 0">${list.map((n, i) => `<span class="badge" style="margin:2px">${esc(n)} <button class="link danger small" data-ld-del="${i}">✕</button></span>`).join('') || '<span class="small muted">No names yet.</span>'}</div>
+      <form id="ld-add" class="row" style="gap:6px"><input name="name" placeholder="Loader name" required style="flex:1"><button class="primary small">+ Add</button></form>`;
+    const save = async (names) => { try { await api('/admin/loaders', { method: 'PUT', body: { names } }); toast('Saved'); drawLoaders(names); } catch (ex) { toast(ex.message, true); } };
+    card.querySelector('#ld-add').onsubmit = (e) => { e.preventDefault(); const n = String(new FormData(e.target).get('name') || '').trim(); if (n) save([...list, n]); };
+    card.querySelectorAll('[data-ld-del]').forEach((b) => (b.onclick = () => { if (confirm('Remove this loader from the list?')) save(list.filter((_, i) => i !== +b.dataset.ldDel)); }));
+  };
+  api('/admin/godown').then((g) => drawLoaders(g.loaderList || [])).catch(() => {});
   main.querySelectorAll('[data-dsp-cut]').forEach((b) => (b.onclick = async () => {
     const [id, cur] = b.dataset.dspCut.split('|');
     const v = prompt('Dispatch incentive reduction % for this login (0 = no reduction)', cur);

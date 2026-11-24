@@ -2073,11 +2073,18 @@ app.get('/api/dispatch/board', (req, res) => {
 function loaderNames() {
   const units = db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id);
   const set = new Map();
+  for (const n of db().settings.loaders || []) set.set(n.toUpperCase(), n); // the admin's loader list
   for (const p of db().people) if (!p.deleted && p.active && units.includes(p.unitId)) set.set(p.name.toUpperCase(), p.name);
   for (const m of db().assembly) for (const n of m.loaders || []) set.set(n.toUpperCase(), n);
   return [...set.values()].sort();
 }
-admin.get('/godown', (req, res) => res.json({ loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id), loaderNames: loaderNames(), stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
+// Admin: list of Shilphata loaders (offered in the Send box)
+admin.put('/loaders', (req, res) => {
+  db().settings.loaders = [...new Map((Array.isArray(req.body.names) ? req.body.names : []).map((n) => str(n, 60)).filter(Boolean).map((n) => [n.toUpperCase(), n])).values()].slice(0, 200);
+  store.save();
+  res.json({ ok: true });
+});
+admin.get('/godown', (req, res) => res.json({ loaderList: db().settings.loaders || [], loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id), loaderNames: loaderNames(), stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 
 // Old stock already lying in a unit's godown (before this app): added straight to the godown,
