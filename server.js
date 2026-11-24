@@ -2927,6 +2927,7 @@ app.get('/api/staff/fab', need('staff'), (req, res) => {
     isManager: manager,
     items: db().fab.filter((m) => FAB.OPEN.includes(m.status) && (manager ? m.unitId === p.unitId : mine(m) || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))).map(fabView),
     unitLeaders: unitFabPeople(p.unitId, 'fableader'),
+    allLeaders: unitFabPeople(null, 'fableader'), // ⇄ Move can go to another unit's fab leader
     unitHelpers: unitFabPeople(p.unitId, 'fabhelper'),
     leaders: fabLeaders(),
     maxPending: FAB.settings(db()).maxPending,
@@ -3060,12 +3061,13 @@ function fabMove(body, by, unitId) {
   if (!toP) return { error: 'Choose a fab team leader' };
   const list = db().fab.filter((m) => (from ? m.leaderId === from && m.status === 'assigned' : !m.leaderId && m.status === 'waiting') && m.model === model && (!unitId || m.unitId === unitId));
   if (!list.length) return { error: 'No machine of this model is waiting to start with that fab leader' };
-  if (list.some((m) => m.unitId && toP.unitId !== m.unitId)) return { error: 'Choose a fab leader of the same unit' };
+  // a fab leader of another unit may be chosen: the machines then belong to that unit
   const qty = Math.max(1, Math.min(list.length, parseInt(body.qty, 10) || 1));
   const at = new Date().toISOString();
   for (const m of list.slice(0, qty)) {
     (m.edits = m.edits || []).push({ at, by, from: { leaderId: m.leaderId, helperId: m.helperId }, to: { leaderId: to } });
     m.leaderId = to; m.status = 'assigned'; m.assignedAt = at; m.manual = true;
+    if (toP.unitId && m.unitId !== toP.unitId) m.unitId = toP.unitId;
     m.helperId = null; // a helper of the new leader's unit is picked again
   }
   fabAssign();
@@ -3110,7 +3112,7 @@ app.post('/api/staff/fab/move', need('staff'), (req, res) => {
 });
 admin.post('/fab/:id/assign', (req, res) => { const m = fabFind(req, res); if (m) send(res, fabSetPeople(m, req.body, 'admin')); });
 // Unit login: its own fab – enter machines and share them between its fab leaders.
-const unitFabPeople = (unitId, role) => db().people.filter((p) => p.role === role && p.active && !p.deleted && p.unitId === unitId).map((p) => ({ id: p.id, name: p.name, unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
+const unitFabPeople = (unitId, role) => db().people.filter((p) => p.role === role && p.active && !p.deleted && (!unitId || p.unitId === unitId)).map((p) => ({ id: p.id, name: p.name, unitId: p.unitId || '', unitName: unitName(p.unitId), pending: FAB.pendingOf(db(), p.id) }));
 unit.get('/fab', (req, res) => {
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
   res.json({

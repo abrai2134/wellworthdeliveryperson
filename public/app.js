@@ -2910,6 +2910,7 @@ async function renderPainting() {
 async function renderFabStaff() {
   const r = await api('/staff/fab' + (state.fabMonth ? '?month=' + state.fabMonth : ''));
   state.fabLeaders = r.unitLeaders;
+  state.leadersByKind = { ...(state.leadersByKind || {}), fab: r.allLeaders || r.unitLeaders };
   const who = r.isManager ? 'manager' : r.isLeader ? 'fableader' : 'fabhelper'; // the manager: Change fab leader, ▶ Start and ✓ Fab done
   const wrap = $app.querySelector('.wrap');
   const mine = r.items.filter((m) => (m.leader && m.leader.id === state.me.id) || (m.helper && m.helper.id === state.me.id));
@@ -2941,7 +2942,7 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-fab-move]');
   if (!b) return;
   const [url, fromId, unitId, max] = b.dataset.fabMove.split('|');
-  const otherUnits = b.dataset.kind === 'bend'; // bending machines may move to another unit's bending leader
+  const otherUnits = true; // bending / fab machines may move to another unit's leader (they then belong to that unit)
   const leaders = (((state.leadersByKind || {})[b.dataset.kind || 'fab']) || state.fabLeaders || []).filter((l) => l.id !== fromId && (otherUnits || !unitId || !l.unitId || l.unitId === unitId))
     .sort((x, y) => (x.unitId === unitId ? 0 : 1) - (y.unitId === unitId ? 0 : 1) || (x.unitName || '').localeCompare(y.unitName || '') || x.name.localeCompare(y.name));
   openModal(`<h2>⇄ Move ${(STG[b.dataset.kind] || STG.fab).name} machines</h2><div class="muted">${esc(b.dataset.model)} · from <b>${esc(b.dataset.name)}</b> (${max} not started)</div>
