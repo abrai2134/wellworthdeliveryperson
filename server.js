@@ -188,7 +188,7 @@ app.post('/api/login', (req, res) => {
   }
   // a person logs in only with the button of their own section (Fab / Bending / Helper – Team leader)
   if (role === 'staff') {
-    const SECTIONS = { fab: ['fableader', 'fabhelper', 'fabmanager'], bend: ['bendleader', 'bendmanager', 'bendcompany'] };
+    const SECTIONS = { fab: ['fableader', 'fabhelper', 'fabmanager'], bend: ['bendleader', 'bendmanager', 'bendcompany', 'bendcoleader'] };
     const own = Object.keys(SECTIONS).find((k) => SECTIONS[k].includes(account.role)) || 'staff';
     const asked = ['fab', 'bend'].includes(str(req.body.section)) ? str(req.body.section) : 'staff';
     const NAMES = { fab: '🏭 Fab', bend: '🔩 Bending', staff: '🧰 Helper / Team leader' };
@@ -2424,16 +2424,19 @@ function migrateCompanyWorkers() {
   delete set.companyWorkers;
   store.save();
 }
-const companyPeople = (unitId) => db().people.filter((p) => p.role === 'bendcompany' && !p.deleted && (!unitId || !p.unitId || p.unitId === unitId));
-const findCompanyPerson = (name) => db().people.find((p) => p.role === 'bendcompany' && !p.deleted && p.name.trim().toUpperCase() === String(name || '').trim().toUpperCase());
+// bendcompany = company (payroll) bending person, bendcoleader = company (payroll) bending team leader
+const CO_ROLES = ['bendcompany', 'bendcoleader'];
+const companyPeople = (unitId, role) => db().people.filter((p) => (role ? p.role === role : CO_ROLES.includes(p.role)) && !p.deleted && (!unitId || !p.unitId || p.unitId === unitId));
+const findCompanyPerson = (name) => db().people.find((p) => CO_ROLES.includes(p.role) && !p.deleted && p.name.trim().toUpperCase() === String(name || '').trim().toUpperCase());
 // is this machine bent by that company employee (by id, or by name for older entries)
 const sameCo = (id, name, p) => (id ? id === p.id : (name || '').trim().toUpperCase() === p.name.trim().toUpperCase());
 // 'leader' / 'person' when this company employee was the company team leader / person of the machine
 const coRole = (m, p) => (!m.byCompany ? null : m.companyLeader && sameCo(m.companyLeaderId, m.companyLeader, p) ? 'leader' : sameCo(m.companyWorkerId, m.companyWorker, p) ? 'person' : null);
 const coMine = (m, p) => !!coRole(m, p);
 // names offered in the Start by company box
-const bendWorkers = (unitId) => [...new Set(companyPeople(unitId).filter((p) => p.active).map((p) => p.name))].sort();
-const coPersonView = (p) => ({ id: p.id, name: p.name, phone: p.phone || '', username: p.username || '', unitId: p.unitId || '', unitName: unitName(p.unitId), active: !!p.active, canLogin: !!p.passHash });
+const bendWorkers = (unitId) => [...new Set(companyPeople(unitId, 'bendcompany').filter((p) => p.active).map((p) => p.name))].sort();
+const bendCoLeaders = (unitId) => [...new Set(companyPeople(unitId, 'bendcoleader').filter((p) => p.active).map((p) => p.name))].sort();
+const coPersonView = (p) => ({ id: p.id, name: p.name, phone: p.phone || '', username: p.username || '', unitId: p.unitId || '', unitName: unitName(p.unitId), active: !!p.active, canLogin: !!p.passHash, role: p.role });
 // company (payroll) employees who did bending: machines and their bending incentive
 function bendCompanyBoard(month) {
   const g = {};
@@ -2550,7 +2553,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
   migrateCompanyWorkers();
   const p = req.user.account;
   const month = monthOf(req.query.month);
-  if (p.role === 'bendcompany') {
+  if (CO_ROLES.includes(p.role)) {
     // company bending employee: own bending this month and the incentive
     const done = db().bend.filter((m) => m.status === 'done' && coMine(m, p) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
     return res.json({ isCompany: true, month, unitName: unitName(p.unitId),
@@ -2573,6 +2576,7 @@ app.get('/api/staff/bend', need('staff'), (req, res) => {
     month,
     done: db().bend.filter((m) => m.status === 'done' && mine(m) && (m.completedAt || '').slice(0, 7) === month).sort((a, b) => b.completedAt.localeCompare(a.completedAt)).map(bendView),
     workers: bendWorkers(p.unitId),
+    coLeaders: bendCoLeaders(p.unitId),
     companyPeople: manager ? companyPeople(p.unitId).map(coPersonView) : [],
     myAmount: p.role === 'bendleader' ? db().bend.filter((m) => m.status === 'done' && m.leaderId === p.id && (m.completedAt || '').slice(0, 7) === month).reduce((t, m) => t + (m.bendAmount || 0), 0) : null,
   });
@@ -2606,7 +2610,7 @@ app.post('/api/staff/bend/move', need('staff'), (req, res) => {
 function staffCoSave(req, res, existing) {
   const p = req.user.account;
   if (p.role !== 'bendmanager') return bad(res, 'Only the bending admin can add company employees');
-  const r = readPerson({ ...req.body, role: 'bendcompany', unitId: p.unitId, payType: 'payroll', backup: false, incentiveCut: 0, active: req.body.active !== false }, existing);
+  const r = readPerson({ ...req.body, role: req.body.role === 'bendcoleader' || (existing && existing.role === 'bendcoleader') ? 'bendcoleader' : 'bendcompany', unitId: p.unitId, payType: 'payroll', backup: false, incentiveCut: 0, active: req.body.active !== false }, existing);
   if (r.error) return bad(res, r.error);
   if (findCompanyPerson(r.value.name) && findCompanyPerson(r.value.name) !== existing) return bad(res, 'A company employee with this name already exists');
   if (existing) Object.assign(existing, r.value);
@@ -2618,7 +2622,7 @@ function staffCoSave(req, res, existing) {
 }
 app.post('/api/staff/bend/workers', need('staff'), (req, res) => staffCoSave(req, res, null));
 app.put('/api/staff/bend/workers/:id', need('staff'), (req, res) => {
-  const w = db().people.find((x) => x.id === req.params.id && x.role === 'bendcompany' && !x.deleted && (!x.unitId || x.unitId === req.user.account.unitId));
+  const w = db().people.find((x) => x.id === req.params.id && CO_ROLES.includes(x.role) && !x.deleted && (!x.unitId || x.unitId === req.user.account.unitId));
   if (!w) return res.status(404).json({ error: 'Not found' });
   staffCoSave(req, res, w);
 });
@@ -2635,6 +2639,7 @@ admin.get('/bend', (req, res) => {
     companyBoard: bendCompanyBoard(monthOf(req.query.month)),
     recent: bendRecent(null),
     workers: bendWorkers(),
+    coLeaders: bendCoLeaders(),
   });
 });
 admin.post('/bend', (req, res) => { const r = bendAdd(req.body, 'admin', { role: 'admin', id: 'admin' }); if (r.error) return bad(res, r.error); res.json({ ok: true, ...r.value }); });
