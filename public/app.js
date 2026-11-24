@@ -2780,15 +2780,21 @@ function bindPainting(root, v, reload) {
     const both = +coming && +inP;
     openModal(`<h2>✎ Edit – ${esc(vendor || 'no vendor')}</h2><div class="muted">⚙️ ${esc(model)} · ${+coming ? coming + ' coming from fab' : ''}${both ? ' · ' : ''}${+inP ? inP + ' in painting' : ''}</div>
       ${both ? `<label>Which machines? *</label><select name="status"><option value="in">In painting (${inP})</option><option value="coming">Coming from fab (${coming})</option></select>` : `<input type="hidden" name="status" value="${+inP ? 'in' : 'coming'}">`}
-      <div class="row" style="margin-top:8px"><label class="check"><input type="radio" name="act" value="vendor" checked> 🎨 Change vendor</label><label class="check"><input type="radio" name="act" value="model"> ✎ Correct model no.</label><label class="check"><input type="radio" name="act" value="cancel"> ✕ Cancel wrong machines</label></div>
+      <div class="row" style="margin-top:8px"><label class="check"><input type="radio" name="act" value="vendor" checked> 🎨 Change vendor</label><label class="check"><input type="radio" name="act" value="qty"> 🔢 Correct qty</label><label class="check"><input type="radio" name="act" value="model"> ✎ Correct model no.</label><label class="check"><input type="radio" name="act" value="cancel"> ✕ Cancel wrong machines</label></div>
       <div id="pv-model" hidden><label>Correct model no. *</label><input name="newModel" list="asm-models-pv" placeholder="type and pick from the list"><datalist id="asm-models-pv"></datalist></div>
       <div id="pv-to"><label>New vendor *</label><select name="vendor"><option value="">— choose —</option>${(v.vendors || state.pub.paintVendors || []).filter((x) => x !== vendor).map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
+      <div id="pv-newqty" hidden><label>Correct quantity *</label><input name="newQty" type="number" min="0" max="999" value="${+inP || +coming}"><div class="small muted">Lower = extra ones cancelled · higher = more added for ${esc(vendor || 'this row')}.</div></div>
       <div id="pv-reason" hidden><label>Reason *</label><input name="reason" placeholder="e.g. entered twice"></div>
-      <label>How many? *</label><input name="qty" type="number" min="1" max="${Math.max(+coming, +inP)}" value="${+inP || +coming}" required>
+      <label id="pv-howmany">How many? *</label><input name="qty" type="number" min="1" max="${Math.max(+coming, +inP)}" value="${+inP || +coming}" required>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Save</button></div>`,
     async (fd) => {
       const status = fd.get('status');
-      if (fd.get('act') === 'model') {
+      if (fd.get('act') === 'qty') {
+        if (!String(fd.get('reason') || '').trim()) throw new Error('Write the reason');
+        if (!vendor && Number(fd.get('newQty')) > (status === 'in' ? +inP : +coming)) throw new Error('Rows without a vendor can only be reduced – use + Add machines');
+        const r = await api('/admin/painting/qty', { method: 'POST', body: { status, model, qty: fd.get('newQty'), reason: fd.get('reason'), rowVendor: vendor } });
+        toast(r.cancelled ? `${r.cancelled} cancelled` : r.added ? `${r.added} added` : 'No change');
+      } else if (fd.get('act') === 'model') {
         if (!String(fd.get('newModel') || '').trim()) throw new Error('Enter the correct model no.');
         const r = await api('/painting/correct', { method: 'POST', body: { status, model, fromVendor: vendor, newModel: fd.get('newModel'), qty: fd.get('qty') } });
         toast(`${r.changed} changed to ${r.model}`);
@@ -2806,7 +2812,9 @@ function bindPainting(root, v, reload) {
     });
     modalBody.querySelectorAll('[name=act]').forEach((x) => (x.onchange = () => {
       const a = modalBody.querySelector('[name=act]:checked').value;
-      modalBody.querySelector('#pv-to').hidden = a !== 'vendor'; modalBody.querySelector('#pv-reason').hidden = a !== 'cancel'; modalBody.querySelector('#pv-model').hidden = a !== 'model';
+      modalBody.querySelector('#pv-to').hidden = a !== 'vendor'; modalBody.querySelector('#pv-reason').hidden = a !== 'cancel' && a !== 'qty'; modalBody.querySelector('#pv-model').hidden = a !== 'model';
+      modalBody.querySelector('#pv-newqty').hidden = a !== 'qty';
+      const hm = modalBody.querySelector('[name=qty]'); hm.style.display = a === 'qty' ? 'none' : ''; modalBody.querySelector('#pv-howmany').style.display = a === 'qty' ? 'none' : '';
     }));
     loadMachineList().then((ms) => { const dl = modalBody.querySelector('#asm-models-pv'); if (dl) dl.innerHTML = ms.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join(''); });
   }));

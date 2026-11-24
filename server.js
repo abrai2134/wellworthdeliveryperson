@@ -3087,7 +3087,8 @@ admin.post('/painting/qty', (req, res) => {
   if (!reason) return bad(res, 'Write the reason');
   const want = parseInt(req.body.qty, 10);
   if (!(want >= 0 && want <= 999)) return bad(res, 'Enter the correct quantity');
-  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, model))
+  const rowVendor = req.body.rowVendor !== undefined ? str(req.body.rowVendor, 80) : null; // one vendor-wise row only
+  const list = db().painting.filter((x) => x.status === status && ASM.sameRate(x.model, model) && (rowVendor === null || (x.vendor || '') === rowVendor))
     .sort((a, b) => (b.inAt || b.createdAt || '').localeCompare(a.inAt || a.createdAt || '')); // newest first
   const at = new Date().toISOString();
   if (want < list.length) {
@@ -3101,7 +3102,7 @@ admin.post('/painting/qty', (req, res) => {
   }
   if (want > list.length) {
     { const miss = rateMissing(model); if (miss) return bad(res, miss); }
-    const vendor = paintVendors().find((v) => v.toUpperCase() === str(req.body.vendor, 80).toUpperCase());
+    const vendor = paintVendors().find((v) => v.toUpperCase() === (rowVendor || str(req.body.vendor, 80)).toUpperCase());
     if (!vendor) return bad(res, 'Choose the vendor for the added machines');
     const n = want - list.length;
     for (let i = 0; i < n; i++) db().painting.push(status === 'coming'
