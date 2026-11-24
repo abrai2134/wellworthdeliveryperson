@@ -1928,6 +1928,10 @@ function sendFromGodown(body, who) {
     if (wrong) return { error: `This machine is booked for "${wrong.bookedParty}" but you are dispatching to "${str(body.party)}". Booked for someone else and dispatching to someone else – kindly correct the booking name first (✎ Correct → Change booking).` };
   }
   if (to === 'unit' && (!liveUnit(str(body.toUnitId)) || str(body.toUnitId) === fromUnitId)) return { error: 'Choose a different unit to send to' };
+  // Shilphata: client dispatch needs the loaders' names (they get the loading incentive)
+  const loaders = to === 'client' && isLoaderUnit(fromUnitId)
+    ? [...new Map((Array.isArray(body.loaders) ? body.loaders : []).map((n) => str(n, 60)).filter(Boolean).map((n) => [n.toUpperCase(), n])).values()].slice(0, 20) : [];
+  if (to === 'client' && isLoaderUnit(fromUnitId) && who.dispatcherId && !loaders.length) return { error: 'Enter the loaders (how many and their names)' };
   // Dispatch photo (vehicle / loaded machine / challan) is compulsory for Dispatch logins.
   const ph = readPhotos({ photos: [] }, body.photos);
   if (ph.error) return ph;
@@ -1957,6 +1961,7 @@ function sendFromGodown(body, who) {
       m.dispatchedAt = at;
       m.dispatchedBy = by;
       m.dispatchNote = str(body.note, 200);
+      if (loaders.length) m.loaders = loaders;
       m.dispatchIncentive = who.dispatcherId ? { dispatcherId: who.dispatcherId, name: by, fromUnitId: m.unitId, amount: dispatchCut(ASM.dispatchAmount(db(), m.model, m.unitId), who.dispatcherId) } : null;
     }
   } else return { error: 'Choose: to another unit or to a client' };
@@ -2001,6 +2006,8 @@ app.get('/api/dispatch/home', need('dispatch'), (req, res) => {
     me: mine ? { toClient: mine.toClient, toBonusUnit: mine.toBonusUnit, clientIncentive: mine.clientIncentive, unitBonus: mine.unitBonus, incentive: mine.incentive }
       : { toClient: 0, toBonusUnit: 0, clientIncentive: 0, unitBonus: 0, incentive: 0 },
     bonusUnitNames: ASM.bonusUnits(db()).map(unitName).filter(Boolean),
+    loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id),
+    loaderNames: loaderNames(),
   });
 });
 app.post('/api/dispatch/send', need('dispatch'), (req, res) => send(res, sendFromGodown(req.body, { name: req.user.account.name, dispatcherId: req.user.id })));
@@ -2028,13 +2035,48 @@ function dispatchMissingRates(month) {
   }
   return Object.values(g).map((x) => ({ model: x.model, qty: x.qty, by: [...x.by].join(', ') }));
 }
+// Loading incentive (Shilphata client dispatch): per day + client, by total machines loaded,
+// each loader gets: up to 20 → ₹20, 21–30 → ₹30, 31–50 → ₹45 (more than 50 → ₹45).
+const LOADER_SLABS = [{ upTo: 20, amount: 20 }, { upTo: 30, amount: 30 }, { upTo: 50, amount: 45 }];
+function isLoaderUnit(unitId) { return /shilphata/i.test(unitName(unitId)); }
+function loaderSlab(qty) { const s = db().settings.loaderSlabs || LOADER_SLABS; const hit = s.find((x) => qty <= x.upTo); return hit ? hit.amount : s[s.length - 1].amount; }
+function loaderBoard(month, dispatcherName) {
+  const trips = {};
+  for (const m of db().assembly) {
+    if (m.location !== 'dispatched' || !(m.loaders || []).length || (m.dispatchedAt || '').slice(0, 7) !== month) continue;
+    if (dispatcherName && m.dispatchedBy !== dispatcherName) continue;
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: db().settings.timezone || 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(m.dispatchedAt));
+    const k = day + '|' + String(m.dispatchParty || '').trim().toUpperCase();
+    const t = (trips[k] ||= { day, party: m.dispatchParty || '', qty: 0, loaders: new Map(), by: m.dispatchedBy || '' });
+    t.qty++;
+    for (const n of m.loaders) t.loaders.set(n.toUpperCase(), n);
+  }
+  const list = Object.values(trips).map((t) => ({ day: t.day, party: t.party, qty: t.qty, by: t.by, loaders: [...t.loaders.values()], each: loaderSlab(t.qty) }))
+    .sort((a, b) => b.day.localeCompare(a.day));
+  const per = {};
+  for (const t of list) for (const n of t.loaders) { const x = (per[n.toUpperCase()] ||= { name: n, trips: 0, machines: 0, amount: 0 }); x.trips++; x.machines += t.qty; x.amount += t.each; }
+  return { trips: list, loaders: Object.values(per).sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name)) };
+}
+app.get('/api/dispatch/loaders', (req, res) => {
+  if (!req.user || !['admin', 'dispatch'].includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
+  const month = monthOf(req.query.month);
+  res.json({ month, ...loaderBoard(month, req.user.role === 'dispatch' ? req.user.account.name : null), slabs: db().settings.loaderSlabs || LOADER_SLABS });
+});
 app.get('/api/dispatch/board', (req, res) => {
   if (!req.user || !['admin', 'dispatch'].includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
   const month = monthOf(req.query.month);
   const board = ASM.dispatchBoard(db(), month);
   res.json({ board, missing: req.user.role === 'admin' ? dispatchMissingRates(month) : [] });
 });
-admin.get('/godown', (req, res) => res.json({ stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
+// names offered for loaders: people of the loading unit(s) and names used before
+function loaderNames() {
+  const units = db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id);
+  const set = new Map();
+  for (const p of db().people) if (!p.deleted && p.active && units.includes(p.unitId)) set.set(p.name.toUpperCase(), p.name);
+  for (const m of db().assembly) for (const n of m.loaders || []) set.set(n.toUpperCase(), n);
+  return [...set.values()].sort();
+}
+admin.get('/godown', (req, res) => res.json({ loaderUnits: db().units.filter((u) => !u.deleted && isLoaderUnit(u.id)).map((u) => u.id), loaderNames: loaderNames(), stock: ASM.stock(db()), units: db().units.filter((u) => u.active && !u.deleted).map((u) => ({ id: u.id, name: u.name })), history: godownHistory() }));
 admin.post('/godown/send', (req, res) => send(res, sendFromGodown(req.body, { name: 'admin' })));
 
 // Old stock already lying in a unit's godown (before this app): added straight to the godown,

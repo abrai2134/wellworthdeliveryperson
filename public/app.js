@@ -2110,12 +2110,14 @@ async function adminAssembly(main) {
   document.getElementById('af-unit').onchange = (e) => { state.asmFilter = { ...f, unit: e.target.value }; adminAssembly(main); };
   document.getElementById('af-status').onchange = (e) => { state.asmFilter = { ...f, status: e.target.value }; adminAssembly(main); };
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
+  api('/admin/godown').then((g) => { state.loaderNames = g.loaderNames || []; }).catch(() => {});
   bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
   document.getElementById('add-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
   api('/dispatch/board').then((b) => {
     const box = document.getElementById('adm-dsp-board');
     if (!box) return;
-    box.innerHTML = dispatchBoardHtml(b.board, monthNow(), false) + ((b.missing || []).length ? `<div class="card section" style="border-color:#f3c0c0"><b>⚠ Sent to clients without a dispatch rate (₹0)</b>
+    api('/dispatch/loaders').then((lb) => { const el = document.getElementById('adm-loaders'); if (el) el.innerHTML = loaderBoardHtml(lb); }).catch(() => {});
+    box.innerHTML = '<div id="adm-loaders"></div>' + dispatchBoardHtml(b.board, monthNow(), false) + ((b.missing || []).length ? `<div class="card section" style="border-color:#f3c0c0"><b>⚠ Sent to clients without a dispatch rate (₹0)</b>
       <div class="small muted">Add these exact model names in <i>Dispatch incentive per model</i> below and save – the incentive is then added to these dispatches automatically.</div>
       <ul class="small" style="margin:6px 0 0 18px">${b.missing.map((x) => `<li><b>${esc(x.model)}</b> × ${x.qty} <span class="muted">(${esc(x.by)})</span></li>`).join('')}</ul></div>` : '');
   });
@@ -2413,6 +2415,7 @@ function bindSend(root, url, units, reload) {
   root.querySelectorAll('[data-send]').forEach((b) => (b.onclick = () => {
     const [unitId, model, max] = b.dataset.send.split('|');
     const from = units.find((u) => u.id === unitId) || { name: '' };
+    const needLoaders = /shilphata/i.test(from.name || ''); // Shilphata client dispatch: loaders' names
     let booked = [];
     try { booked = JSON.parse(b.dataset.booked || '[]'); } catch { booked = []; }
     let entries = [];
@@ -2432,7 +2435,10 @@ function bindSend(root, url, units, reload) {
       <label>Send to *</label>
       <div class="row"><label class="check"><input type="radio" name="to" value="client" checked> 👤 Client (dispatch)</label><label class="check"><input type="radio" name="to" value="unit"> 🏬 Another unit</label></div>
       <div id="s-client" class="lookup">${b.dataset.norate ? '<div class="error" style="margin:6px 0">⚠ No dispatch incentive is set for this model – you get ₹0 for it until the admin adds its rate (exact model name).</div>' : ''}<label>Client name *</label><input name="party" id="s-party" autocomplete="off" placeholder="type party name to search"><div id="s-party-list" class="lookup-list" hidden></div>
-        <div class="small muted">Only machines <b>booked for this client</b> can be dispatched. You get the dispatch incentive for each machine sent to a client.</div></div>
+        <div class="small muted">Only machines <b>booked for this client</b> can be dispatched. You get the dispatch incentive for each machine sent to a client.</div>
+        ${needLoaders ? `<div style="margin-top:10px"><label>🏋️ How many loaders? ${url.startsWith('/admin') ? '' : '*'}</label><select id="s-ln" style="width:auto">${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<option ${n === 0 ? 'selected' : ''}>${n}</option>`).join('')}</select>
+          <div id="s-lnames"></div><datalist id="s-loader-list">${(state.loaderNames || []).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+          <div class="small muted">Each loader gets the loading incentive (per day & client: up to 20 machines ₹20, 21–30 ₹30, 31–50 ₹45).</div></div>` : ''}</div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
         <div class="small muted">Moves to that unit's godown (a booked machine stays booked for its client).</div></div>
       <label>📷 Dispatch photo ${url.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
@@ -2442,6 +2448,12 @@ function bindSend(root, url, units, reload) {
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">Send</button></div>`,
     async (fd) => {
       const body = { ...Object.fromEntries(fd), fromUnitId: unitId, model, photos: getPhotos() };
+      if (needLoaders && body.to === 'client') {
+        body.loaders = [...modalBody.querySelectorAll('.s-loader')].map((x) => x.value.trim()).filter(Boolean);
+        const want = Number((modalBody.querySelector('#s-ln') || {}).value || 0);
+        if (!url.startsWith('/admin') && !want) throw new Error('Choose how many loaders');
+        if (body.loaders.length < want) throw new Error('Write the name of every loader');
+      }
       if (booked.length && !body.pick) throw new Error('Choose which machines you are sending: free stock or booked for a client');
       if (body.to === 'client' && (!booked.length || body.pick === 'free')) throw new Error('Free stock (not booked) cannot be dispatched to a client. Book the machine for the client first (✎ Correct → Change booking), then you can dispatch. Free stock can only be sent to another unit\'s godown.');
       if (entries.length > 1 && body.entryIdx === undefined) throw new Error('Choose which machines you are sending (assembled by whom / when)');
@@ -2456,6 +2468,11 @@ function bindSend(root, url, units, reload) {
       reload();
     });
     clientSearch(document.getElementById('s-party'), document.getElementById('s-party-list'));
+    const ln = modalBody.querySelector('#s-ln');
+    if (ln) ln.onchange = () => {
+      const box = modalBody.querySelector('#s-lnames'); const old = [...box.querySelectorAll('.s-loader')].map((x) => x.value);
+      box.innerHTML = Array.from({ length: Number(ln.value) }, (_, i) => `<input class="s-loader" list="s-loader-list" placeholder="Loader ${i + 1} name" value="${esc(old[i] || '')}" style="margin-top:6px">`).join('');
+    };
     const getPhotos = photoPicker(document.getElementById('s-photos'));
     modalBody.querySelectorAll('[name=entryIdx]').forEach((r) => (r.onchange = () => { const q = modalBody.querySelector('[name=qty]'); const e = entries[Number(r.value)]; q.max = e.qty; if (Number(q.value) > e.qty) q.value = e.qty; }));
     // booked machine going to a client: fill in that client's name
@@ -2474,6 +2491,17 @@ function bindSend(root, url, units, reload) {
   }));
 }
 
+// 🏋️ Loading incentive (Shilphata client dispatch)
+function loaderBoardHtml(r) {
+  if (!r || !(r.trips || []).length) return '';
+  return `<div class="card section"><h2 style="margin:0">🏋️ Loaders – ${esc(r.month)}</h2><div class="small muted">Per day & client: up to 20 machines ₹20, 21–30 ₹30, 31–50 ₹45 for each loader.</div>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Loader</th><th class="num">Dispatches</th><th class="num">Machines</th><th class="num">Incentive</th></tr></thead><tbody>
+    ${r.loaders.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.trips}</td><td class="num">${x.machines}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}
+    <tr><td><b>Total</b></td><td></td><td></td><td class="num"><b>₹${r.loaders.reduce((t, x) => t + x.amount, 0)}</b></td></tr></tbody></table></div>
+    <details style="margin-top:8px"><summary class="small"><b>Dispatch-wise (${r.trips.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Date</th><th>Client</th><th class="num">Machines</th><th>Loaders</th><th class="num">Each</th></tr></thead><tbody>
+    ${r.trips.map((t) => `<tr><td class="small">${esc(fmtDate(t.day))}</td><td>${esc(t.party)}<div class="small muted">${esc(t.by)}</div></td><td class="num">${t.qty}</td><td class="small">${t.loaders.map(esc).join(', ')}</td><td class="num">₹${t.each}</td></tr>`).join('')}
+    </tbody></table></div></details></div>`;
+}
 function dispatchBoardHtml(board, month, picker, unitLabel) {
   const sum = (k) => board.reduce((t, x) => t + (x[k] || 0), 0);
   return `<div class="card section"><div class="row"><h2 style="margin:0">🏆 Dispatch scoreboard</h2><div class="spacer"></div>${picker ? `<input type="month" id="dsp-month" value="${esc(month)}" style="width:auto">` : `<span class="badge">${esc(month)}</span>`}</div>
@@ -2515,10 +2543,12 @@ async function renderDispatch() {
       <div class="big">₹${r.me.incentive} incentive</div>
       <div class="line">🚚 ${r.me.toClient} machine${r.me.toClient === 1 ? '' : 's'} dispatched to clients: <b>₹${r.me.clientIncentive}</b></div>
       <div class="line">🔁 ${r.me.toBonusUnit} sent to ${esc((r.bonusUnitNames || []).join(' / ') || 'the bonus unit')}: <b>₹${r.me.unitBonus}</b> transfer bonus</div></div>
-    ${godownHtml(r.stock, true)}${dispatchBoardHtml(r.board, r.month, true, 'To ' + ((r.bonusUnitNames || []).join(' / ') || 'bonus unit'))}${historyHtml(r.history)}`;
+    ${godownHtml(r.stock, true)}<div id="dsp-loaders"></div>${dispatchBoardHtml(r.board, r.month, true, 'To ' + ((r.bonusUnitNames || []).join(' / ') || 'bonus unit'))}${historyHtml(r.history)}`;
   const mi = document.getElementById('dsp-month');
   if (mi) mi.onchange = (e) => { state.dspMonth = e.target.value; renderDispatch(); };
+  state.loaderNames = r.loaderNames || [];
   bindSend(wrap, '/dispatch/send', r.units, renderDispatch);
+  api('/dispatch/loaders' + (state.dspMonth ? '?month=' + state.dspMonth : '')).then((lb) => { const el = document.getElementById('dsp-loaders'); if (el) el.innerHTML = loaderBoardHtml(lb); }).catch(() => {});
 }
 
 // ---------- Fab → Painting → Assembly ----------
