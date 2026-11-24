@@ -2438,7 +2438,7 @@ function bindSend(root, url, units, reload) {
         <div class="small muted">Only machines <b>booked for this client</b> can be dispatched. You get the dispatch incentive for each machine sent to a client.</div>
         ${needLoaders ? `<div style="margin-top:10px"><label>🏋️ How many loaders? ${url.startsWith('/admin') ? '' : '*'}</label><select id="s-ln" style="width:auto">${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<option ${n === 0 ? 'selected' : ''}>${n}</option>`).join('')}</select>
           <div id="s-lnames"></div><datalist id="s-loader-list">${(state.loaderNames || []).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
-          <div class="small muted">Each loader gets the loading incentive (per day & client: up to 20 machines ₹20, 21–30 ₹30, 31–50 ₹45).</div></div>` : ''}</div>
+          <div class="small muted">Each loader gets the loading incentive per day (all machines loaded that day: up to 20 ₹20, 21–30 ₹30, 31–50 ₹45).</div></div>` : ''}</div>
       <div id="s-unit" hidden><label>Unit *</label><select name="toUnitId"><option value="">— choose —</option>${units.filter((u) => u.id !== unitId).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
         <div class="small muted">Moves to that unit's godown (a booked machine stays booked for its client).</div></div>
       <label>📷 Dispatch photo ${url.startsWith('/admin') ? '(optional for admin)' : '*'}</label>
@@ -2494,11 +2494,11 @@ function bindSend(root, url, units, reload) {
 // 🏋️ Loading incentive (Shilphata client dispatch)
 function loaderBoardHtml(r) {
   if (!r || !(r.trips || []).length) return '';
-  return `<div class="card section"><h2 style="margin:0">🏋️ Loaders – ${esc(r.month)}</h2><div class="small muted">Per day & client: up to 20 machines ₹20, 21–30 ₹30, 31–50 ₹45 for each loader.</div>
-    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Loader</th><th class="num">Dispatches</th><th class="num">Machines</th><th class="num">Incentive</th></tr></thead><tbody>
+  return `<div class="card section"><h2 style="margin:0">🏋️ Loaders – ${esc(r.month)}</h2><div class="small muted">Per day (all machines loaded that day): up to 20 ₹20, 21–30 ₹30, 31–50 ₹45 for each loader.</div>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Loader</th><th class="num">Days</th><th class="num">Machines</th><th class="num">Incentive</th></tr></thead><tbody>
     ${r.loaders.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.trips}</td><td class="num">${x.machines}</td><td class="num"><b>₹${x.amount}</b></td></tr>`).join('')}
     <tr><td><b>Total</b></td><td></td><td></td><td class="num"><b>₹${r.loaders.reduce((t, x) => t + x.amount, 0)}</b></td></tr></tbody></table></div>
-    <details style="margin-top:8px"><summary class="small"><b>Dispatch-wise (${r.trips.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Date</th><th>Client</th><th class="num">Machines</th><th>Loaders</th><th class="num">Each</th></tr></thead><tbody>
+    <details style="margin-top:8px"><summary class="small"><b>Day-wise (${r.trips.length})</b></summary><div class="table-wrap" style="margin-top:6px"><table><thead><tr><th>Date</th><th>Clients</th><th class="num">Machines</th><th>Loaders</th><th class="num">Each</th></tr></thead><tbody>
     ${r.trips.map((t) => `<tr><td class="small">${esc(fmtDate(t.day))}</td><td>${esc(t.party)}<div class="small muted">${esc(t.by)}</div></td><td class="num">${t.qty}</td><td class="small">${t.loaders.map(esc).join(', ')}</td><td class="num">₹${t.each}</td></tr>`).join('')}
     </tbody></table></div></details></div>`;
 }

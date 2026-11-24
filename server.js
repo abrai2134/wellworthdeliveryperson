@@ -2035,7 +2035,7 @@ function dispatchMissingRates(month) {
   }
   return Object.values(g).map((x) => ({ model: x.model, qty: x.qty, by: [...x.by].join(', ') }));
 }
-// Loading incentive (Shilphata client dispatch): per day + client, by total machines loaded,
+// Loading incentive (Shilphata client dispatch): per DAY (all clients together), by total machines loaded,
 // each loader gets: up to 20 → ₹20, 21–30 → ₹30, 31–50 → ₹45 (more than 50 → ₹45).
 const LOADER_SLABS = [{ upTo: 20, amount: 20 }, { upTo: 30, amount: 30 }, { upTo: 50, amount: 45 }];
 function isLoaderUnit(unitId) { return /shilphata/i.test(unitName(unitId)); }
@@ -2046,12 +2046,13 @@ function loaderBoard(month, dispatcherName) {
     if (m.location !== 'dispatched' || !(m.loaders || []).length || (m.dispatchedAt || '').slice(0, 7) !== month) continue;
     if (dispatcherName && m.dispatchedBy !== dispatcherName) continue;
     const day = new Intl.DateTimeFormat('en-CA', { timeZone: db().settings.timezone || 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(m.dispatchedAt));
-    const k = day + '|' + String(m.dispatchParty || '').trim().toUpperCase();
-    const t = (trips[k] ||= { day, party: m.dispatchParty || '', qty: 0, loaders: new Map(), by: m.dispatchedBy || '' });
+    const t = (trips[day] ||= { day, parties: new Map(), qty: 0, loaders: new Map(), by: new Set() });
     t.qty++;
+    const pk = String(m.dispatchParty || '').trim().toUpperCase(); const pe = t.parties.get(pk) || { name: m.dispatchParty || '', qty: 0 }; pe.qty++; t.parties.set(pk, pe);
+    if (m.dispatchedBy) t.by.add(m.dispatchedBy);
     for (const n of m.loaders) t.loaders.set(n.toUpperCase(), n);
   }
-  const list = Object.values(trips).map((t) => ({ day: t.day, party: t.party, qty: t.qty, by: t.by, loaders: [...t.loaders.values()], each: loaderSlab(t.qty) }))
+  const list = Object.values(trips).map((t) => ({ day: t.day, party: [...t.parties.values()].map((x) => `${x.name} × ${x.qty}`).join(', '), qty: t.qty, by: [...t.by].join(', '), loaders: [...t.loaders.values()], each: loaderSlab(t.qty) }))
     .sort((a, b) => b.day.localeCompare(a.day));
   const per = {};
   for (const t of list) for (const n of t.loaders) { const x = (per[n.toUpperCase()] ||= { name: n, trips: 0, machines: 0, amount: 0 }); x.trips++; x.machines += t.qty; x.amount += t.each; }
