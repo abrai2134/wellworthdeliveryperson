@@ -145,3 +145,4 @@ Code layout: `server.js` (web server and API), `lib/scheduler.js` (allocation), 
 - **Fab ⇄ Move to another unit** – like Bending, the Move list also shows fab leaders of other units (🏢 unit – name); the machines then belong to that unit (a fab helper of that unit is picked; painting / assembly follow that unit).
 - **⬆ Out – whose machines** – the Out of painting box lists the machines in painting per vendor and unit – fab leader (who did ⬇ In, when) with a number box each, so the right ones go out. At the unit, *🎨 Arrived from painting* lines show whose fab work it was and the vendor.
 - **↩ Undo In** – on an *In painting* line (painting login / admin): machines taken ⬇ In by mistake (not arrived yet) go back to *Coming from fab*; choose how many per line (vendor, unit – fab leader, who did In, when).
+- **Fab done – vendor shown** – the Fab done list (fab logins) has a 🎨 Vendor column, and done machines in the admin / unit lists show "🎨 to vendor …".

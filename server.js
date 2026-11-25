@@ -2284,6 +2284,7 @@ function fabView(m) {
     id: m.id, model: m.model, status: m.status, unitId: m.unitId || null, unitName: unitName(m.unitId), leader: personBrief(m.leaderId), helper: personBrief(m.helperId),
     createdAt: m.createdAt, createdBy: m.createdBy || '', assignedAt: m.assignedAt || null, startedAt: m.startedAt || null,
     completedAt: m.completedAt || null, note: m.note || '', cancelReason: m.cancelReason || '', edits: m.edits || [],
+    paintVendor: m.paintVendor || '', // painting vendor chosen at Fab done
   };
 }
 // Fab contractor rate per model (exact model name, like the assembly incentive).
