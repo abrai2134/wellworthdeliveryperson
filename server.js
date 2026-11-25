@@ -2843,6 +2843,16 @@ app.post('/api/painting/vendor', (req, res, next) => (req.user && ['painting', '
   store.save();
   res.json({ ok: true, changed: n });
 });
+// ↩ Undo ⬇ In: machines taken In by mistake (not arrived yet) go back to "Coming from fab"
+app.post('/api/painting/undo-in', (req, res, next) => (req.user && ['painting', 'admin'].includes(req.user.role) ? next() : res.status(401).json({ error: 'Please log in' })), (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map((x) => str(x, 40)) : [];
+  const list = db().painting.filter((x) => ids.includes(x.id) && x.status === 'in' && (x.fromFab || x.addedBy));
+  if (!list.length) return bad(res, 'Nothing to send back – refresh the page');
+  const at = new Date().toISOString(), by = painterName(req);
+  for (const x of list) { (x.edits = x.edits || []).push({ at, by, undoIn: { at: x.inAt, by: x.inBy } }); x.status = 'coming'; delete x.inAt; delete x.inBy; }
+  store.save();
+  res.json({ ok: true, changed: list.length });
+});
 const arrivedList = (unitId, model) => db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && m.model === model);
 app.post('/api/staff/assembly/arrived/correct', need('staff'), (req, res) => {
   const p = req.user.account;

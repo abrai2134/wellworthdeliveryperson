@@ -2760,7 +2760,7 @@ function paintingHtml(v) {
   return vendorCard + `<div class="section"><div class="row"><h2 style="margin:0">⬇ Coming from fab</h2><div class="spacer"></div><span class="badge w4">${v.coming.reduce((t, x) => t + x.qty, 0)} machines</span>${v.coming.length ? shareButtons(shareOf('Coming from fab', v.coming, 'coming')) : ''}${isAdm ? '<button class="small" id="paint-add-coming">+ Add</button>' : ''}</div>
       <div class="done-list" style="margin-top:8px">${v.coming.length ? v.coming.map((x) => line(x, `<button class="small primary nowrap" data-paint-in="${esc(x.model)}|${x.qty}" data-k="${esc(x.model)}">⬇ In</button>` + ` <button class="small nowrap" data-paint-fix="coming|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="coming|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="coming|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">Nothing coming from fab.</div>'}</div></div>
     <div class="section"><div class="row"><h2 style="margin:0">🎨 In painting (Ready at Well Worth)</h2><div class="spacer"></div><span class="badge w4">${v.inPainting.reduce((t, x) => t + x.qty, 0)} machines</span>${v.inPainting.length ? shareButtons(shareOf('In painting (Ready at Well Worth)', v.inPainting, 'in')) : ''}</div>
-      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `${v.canOut === false ? '' : `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`}` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-vendor="in|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="in|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
+      <div class="done-list" style="margin-top:8px">${v.inPainting.length ? v.inPainting.map((x) => line(x, `${v.canOut === false ? '' : `<button class="small primary nowrap" data-paint-out="${esc(x.model)}|${x.qty}|${Object.keys(x.units || {}).length === 1 ? esc(Object.keys(x.units)[0]) : ''}">⬆ Out</button>`}` + ` <button class="small nowrap" data-paint-fix="in|${esc(x.model)}|${x.qty}">✎ Correct</button> <button class="small nowrap" data-paint-undo="${esc(x.model)}">↩ Undo In</button> <button class="small nowrap" data-paint-vendor="in|${esc(x.model)}|${x.qty}">🎨 Vendor</button>${state.me && state.me.role === 'admin' ? ` <button class="small nowrap danger" data-paint-qty="in|${esc(x.model)}|${x.qty}">✎ Qty / cancel</button>` : ''}`)).join('') : '<div class="card muted">No machine in painting.</div>'}</div></div>
     ${v.history.length ? `<div class="card section"><h2>Painting in / out (30 days)</h2><div class="table-wrap"><table><thead><tr><th>When</th><th></th><th>Model no.</th><th class="num">Qty</th><th>By</th><th></th></tr></thead><tbody>
       ${v.history.map((h) => `<tr><td class="small">${esc(fmtTime(h.at))}</td><td>${h.kind === 'in' ? '⬇ In' : h.kind === 'cancel' ? '✕ Cancelled' : '⬆ Out'}</td><td>${esc(h.model)}${(h.items || []).length ? `<div class="small muted">${h.items.map((x) => `${esc(x.how)}${x.when ? ' · ' + esc(fmtTime(x.when + ':00Z')) : ''}${x.qty > 1 ? ' × ' + x.qty : ''}`).join('<br>')}</div>` : ''}</td><td class="num"><b>${h.qty}</b></td><td class="small">${esc(h.by)}</td><td class="small muted">${esc(h.note)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
 }
@@ -2878,6 +2878,21 @@ function bindPainting(root, v, reload) {
       const hm = modalBody.querySelector('[name=qty]'); hm.style.display = a === 'qty' ? 'none' : ''; modalBody.querySelector('#pv-howmany').style.display = a === 'qty' ? 'none' : '';
     }));
     loadMachineList().then((ms) => { const dl = modalBody.querySelector('#asm-models-pv'); if (dl) dl.innerHTML = ms.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join(''); });
+  }));
+  // ↩ Undo In: taken In by mistake (not arrived) → back to Coming from fab
+  root.querySelectorAll('[data-paint-undo]').forEach((b) => (b.onclick = () => {
+    const model = b.dataset.paintUndo;
+    const gi = (v.inPainting || []).find((x) => x.model === model) || { entries: [] };
+    const ents = gi.entries.filter((e) => !/Added directly/.test(e.text));
+    if (!ents.length) { toast('Only machines that came from fab can go back to Coming from fab', true); return; }
+    openModal(`<h2>↩ Undo ⬇ In</h2><div class="muted">⚙️ ${esc(model)} – taken In by mistake (not arrived yet). They go back to ⬇ Coming from fab.</div>
+      ${ents.map((e, i) => `<div class="row" style="flex-wrap:nowrap;gap:8px;margin-top:8px;align-items:center"><div class="small" style="flex:1">${esc(e.text)}${e.at ? ` · 🕒 ${esc(fmtTime(e.at + ':00Z'))}` : ''} <b>(${e.qty})</b></div><input name="u${i}" type="number" min="0" max="${e.qty}" value="0" style="width:80px"></div>`).join('')}
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">↩ Back to Coming from fab</button></div>`,
+    async (fd) => {
+      const ids = ents.flatMap((e, i) => (e.ids || []).slice(0, Math.max(0, Math.min(e.qty, Number(fd.get('u' + i)) || 0))));
+      if (!ids.length) throw new Error('Enter how many go back');
+      const r = await api('/painting/undo-in', { method: 'POST', body: { ids } }); toast(`${r.changed} back to Coming from fab`); reload();
+    });
   }));
   root.querySelectorAll('[data-paint-vendor]').forEach((b) => (b.onclick = () => {
     const [status, model, max] = b.dataset.paintVendor.split('|');
