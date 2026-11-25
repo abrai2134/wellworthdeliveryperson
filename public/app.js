@@ -2784,12 +2784,20 @@ function bindPainting(root, v, reload) {
   }));
   root.querySelectorAll('[data-paint-out]').forEach((b) => (b.onclick = () => {
     const [model, max, unit] = b.dataset.paintOut.split('|');
+    const gi = (v.inPainting || []).find((x) => x.model === model) || { entries: [] };
     openModal(`<h2>⬆ Out of painting → assembly</h2><div class="muted">⚙️ ${esc(model)} · ${max} in painting</div>
       <label>Send to unit for assembly *</label><select name="toUnitId" required><option value="">— choose —</option>${v.units.map((u) => `<option value="${esc(u.id)}" ${u.id === unit ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
-      <label>How many? *</label><input name="qty" type="number" min="1" max="${esc(max)}" value="1" required>
+      <p class="small muted" style="margin:8px 0 4px">Which ones go out? (whose machine – vendor, unit – fab leader, who did ⬇ In, when)</p>
+      ${gi.entries.map((e, i) => `<div class="row" style="flex-wrap:nowrap;gap:8px;margin-top:6px;align-items:center"><div class="small" style="flex:1">${esc(e.text)}${e.at ? ` · 🕒 ${esc(fmtTime(e.at + ':00Z'))}` : ''} <b>(${e.qty})</b></div><input name="o${i}" type="number" min="0" max="${e.qty}" value="0" style="width:80px"></div>`).join('')}
+      <div class="small" style="margin-top:8px">Total: <b id="pout-total">0</b></div>
       <p class="small muted">They show in that unit as "🎨 Arrived from painting"; a team leader of the unit presses ⚖️ Allocate to share them fairly.</p>
       <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">⬆ Out</button></div>`,
-    async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit'); try { await api('/painting/out', { method: 'POST', body: { ...Object.fromEntries(fd), model } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast('Sent to assembly'); reload(); });
+    async (fd) => { if (!fd.get('toUnitId')) throw new Error('Choose the unit');
+      const ids = gi.entries.flatMap((e, i) => (e.ids || []).slice(0, Math.max(0, Math.min(e.qty, Number(fd.get('o' + i)) || 0))));
+      if (!ids.length) throw new Error('Enter how many go out');
+      try { await api('/painting/out', { method: 'POST', body: { toUnitId: fd.get('toUnitId'), model, ids } }); } catch (ex) { if (!/out of date/.test(ex.message)) throw ex; modal.close(); toast(ex.message, true); reload(); return; } toast(`${ids.length} sent to assembly`); reload(); });
+    const updO = () => { const t = gi.entries.reduce((s2, e, i) => s2 + Math.max(0, Math.min(e.qty, Number((modalBody.querySelector(`[name=o${i}]`) || {}).value) || 0)), 0); const el = modalBody.querySelector('#pout-total'); if (el) el.textContent = t; };
+    modalBody.querySelectorAll('input[type=number]').forEach((x) => (x.oninput = updO));
   }));
   // admin only: change the quantity (cancel wrong machines / add missing ones)
   const addForm = (askStatus, presetVendor) => async () => {

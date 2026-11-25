@@ -2766,10 +2766,12 @@ function paintAdd(body, by) {
 // presses Allocate to share them fairly between its team leaders.
 function paintOut(body, by, creator) {
   const model = str(body.model, 120);
-  const qty = parseInt(body.qty, 10);
+  // chosen machines (whose / which vendor), else the oldest ones
+  const ids = Array.isArray(body.ids) ? body.ids.map((x) => str(x, 40)) : null;
+  const qty = ids ? ids.length : parseInt(body.qty, 10);
   const unit = liveUnit(str(body.toUnitId));
   if (!unit) return { error: 'Choose the unit the machines go to for assembly' };
-  const list = db().painting.filter((x) => x.status === 'in' && ASM.sameRate(x.model, model)).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
+  const list = db().painting.filter((x) => x.status === 'in' && ASM.sameRate(x.model, model) && (!ids || ids.includes(x.id))).sort((a, b) => (a.inAt || '').localeCompare(b.inAt || ''));
   if (!(qty >= 1)) return { error: 'Enter the quantity' };
   if (qty > list.length) return { error: `Only ${list.length} of this model are still in painting – the others were already sent ⬆ Out (page was out of date). The list is refreshed – check and try again.` };
   if (rateMissing(model)) return { error: `Model "${model}" has no assembly incentive rate – correct the model no. first (✎ Correct)` };
@@ -2792,7 +2794,11 @@ function arrivedOf(unitId) {
     x.qty++; if ((m.arrivedAt || '') < x.oldest) x.oldest = m.arrivedAt;
     // who pressed ⬆ Out in painting (name + login) and when
     const login = m.creator && m.creator.role === 'admin' ? 'Admin' : m.creator && m.creator.role === 'painting' ? 'Painting login' : '';
-    const text = `⬆ out of painting by ${m.createdBy === 'admin' ? 'Admin' : `${m.createdBy || '?'}${login ? ` (${login})` : ''}`}`;
+    // whose machine: fab unit – fab leader, painting vendor
+    const px = m.paintId && db().painting.find((x) => x.id === m.paintId);
+    const fx = px && px.fabId && db().fab.find((f) => f.id === px.fabId);
+    const whose = fx ? ` · from fab ${unitName(fx.unitId) ? unitName(fx.unitId) + ' – ' : ''}${personName(fx.leaderId) || '?'}` : px && px.madeBy ? ` · made by ${px.madeBy}` : '';
+    const text = `⬆ out of painting by ${m.createdBy === 'admin' ? 'Admin' : `${m.createdBy || '?'}${login ? ` (${login})` : ''}`}${whose}${px && px.vendor ? ' · 🎨 vendor ' + px.vendor : ''}`;
     const at = String(m.arrivedAt || '').slice(0, 16);
     (x.entries[text + '|' + at] ||= { text, at, qty: 0 }).qty++;
   }
