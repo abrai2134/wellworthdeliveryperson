@@ -1524,6 +1524,14 @@ function adminSettings(main) {
 }
 
 // ---------- assembly (shared by admin / unit / team leader) ----------
+// 🕒 Machines from painting allocated in the last 7 days: when, by whom, given to whom
+function allocRecentHtml(list) {
+  if (!(list || []).length) return '';
+  return `<details class="card section"><summary><b>🕒 Allocated from painting – last 7 days (${list.length})</b> <span class="small muted">· when, by whom, given to whom</span></summary>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>When</th><th>Allocated by</th><th>Model no.</th><th>Unit</th><th class="num">Qty</th><th>Given to</th></tr></thead><tbody>
+    ${list.map((x) => `<tr><td class="small">${esc(fmtTime(x.at))}</td><td>${esc(x.by)}</td><td>${esc(x.model)}</td><td>${esc(x.unitName)}</td><td class="num"><b>${x.qty}</b></td><td class="small">${Object.entries(x.given).map(([n, c]) => `${esc(n)} × ${c}`).join('<br>')}</td></tr>`).join('')}
+    </tbody></table></div></details>`;
+}
 // Machines arrived from painting, not given out yet. url: where Allocate posts (null = no button).
 function arrivedHtml(list, url, unitId) {
   if (!list || !list.length) return '';
@@ -1541,6 +1549,9 @@ document.addEventListener('click', async (e) => {
     const r = await api(url, { method: 'POST', body: { unitId, model } });
     toast(`${r.allocated} allocated${r.given < r.allocated ? ` – ${r.allocated - r.given} waiting (team leaders full)` : ''}`);
     render();
+    if (r.givenTo) setTimeout(() => openModal(`<h2>✓ Allocated – given to</h2>
+      <div style="margin-top:8px">${Object.entries(r.givenTo).map(([k, c]) => { const [n, md] = k.split(' | '); return `<div class="row" style="padding:4px 0;border-bottom:1px solid #eee"><div><b>${n.startsWith('⏳') ? '' : '👷 '}${esc(n)}</b><div class="small muted">${esc(md)}</div></div><div class="spacer"></div><span class="godown-qty">${c}</span></div>`; }).join('')}</div>
+      <div class="actions"><button class="primary" value="ok">OK</button></div>`, async () => {}), 300);
   } catch (ex) { toast(ex.message, true); }
 });
 // ✎ Correct a wrong model no. (painting lines and machines arrived from painting)
@@ -1920,7 +1931,7 @@ async function renderUnitAssembly() {
     <div class="row section"><div><h1 style="margin:0">🛠️ Assembly</h1>
       <div class="small muted">Team leaders: ${r.leaders.map((l) => `${esc(l.name)} (${l.pending} pending${l.pending >= r.maxPending ? ' – full' : ''})`).join(' · ') || 'none – ask the admin to add team leaders'}</div></div>
       <div class="spacer"></div><span class="small muted">New machines and stock are entered by team leaders from their own login.</span></div>
-    ${arrivedHtml(r.arrived, null)}
+    ${arrivedHtml(r.arrived, null)}${allocRecentHtml(r.allocRecent)}
     ${asmList(r.items, 'unit')}
     <div id="u-godown"></div>
     <div id="asm-board"><div class="loading">Loading scoreboard…</div></div>`;
@@ -1955,7 +1966,7 @@ async function staffAssemblyHtml(wrap) {
   box.innerHTML = `<div class="row section" style="margin-top:20px"><h2 style="margin:0">🛠️ My assembly</h2><div class="spacer"></div>
       ${r.myMonth && r.myMonth.machines ? `<span class="badge ok">🏆 This month: ${r.myMonth.machines} machine${r.myMonth.machines > 1 ? 's' : ''} · ₹${r.myMonth.incentive}</span>` : ''}
       ${r.isLeader ? `<span class="badge ${r.pending >= r.maxPending ? 'bad' : 'w4'}">${r.pending} / ${r.maxPending} pending</span> <button class="small" id="asm-rates">💰 Incentive rates</button>` : ''}</div>
-    ${r.isLeader ? arrivedHtml(r.arrived, '/staff/assembly/allocate') : ''}
+    ${r.isLeader ? arrivedHtml(r.arrived, '/staff/assembly/allocate') + allocRecentHtml(r.allocRecent) : ''}
     ${r.items.length ? asmList(r.items, 'staff', me) : '<div class="card muted">No assembly machine for you right now.</div>'}
     ${r.requests.length ? `<div class="card" style="margin-top:12px"><h3>My requests</h3>${r.requests.map((q) => `<div class="small">${q.type === 'old' ? '📁 Old machine: ' : '⚙️ '}${esc(q.model)} × ${q.qty}${q.type === 'old' ? ` (${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))})` : ''} – ${q.status === 'pending' ? '<span class="badge warn">waiting for admin</span>' : q.status === 'approved' ? `<span class="badge ok">approved ${q.approvedQty || q.qty}</span>` : '<span class="badge bad">rejected</span>'}${q.reason ? ' · ' + esc(q.reason) : ''}</div>`).join('')}</div>` : ''}
     ${!r.isLeader && r.myMonth ? myMachinesHtml(r.myMonth) : ''}
@@ -2064,7 +2075,7 @@ async function adminAssembly(main) {
       <button id="asm-old">📁 Add old machine</button><button id="asm-stock">📦 Add stock</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     <div class="section"><h2>👷 Team leaders by unit</h2><div class="muted small" style="margin-bottom:8px">Machines of a unit are shared equally between its team leaders (each with 1 installation person + 1 helper of the unit). Adding a leader gives out waiting machines at once; removing one sends their unfinished machines back to the others. Give a PIN so the leader can log in.</div>
       <div class="grid">${leaderCards}</div></div>
-    ${(r.arrived || []).map((u) => `<div><b>🏢 ${esc(u.unitName)}</b>${arrivedHtml(u.models, '/admin/assembly/allocate', u.unitId)}</div>`).join('')}
+    ${(r.arrived || []).map((u) => `<div><b>🏢 ${esc(u.unitName)}</b>${arrivedHtml(u.models, '/admin/assembly/allocate', u.unitId)}</div>`).join('')}${allocRecentHtml(r.allocRecent)}
     ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2><div class="small muted">📝 = wants new machines · 📁 = old machine to add to their record</div>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
         <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">${q.type === 'old' ? '<span class="badge warn">📁 Old machine</span> ' : '📝 '}⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · sent ${esc(fmtTime(q.createdAt))}</div>
         ${q.type === 'old' ? `<div class="small muted">Assembled ${esc(fmtTime(q.startedAt))} → ${esc(fmtTime(q.completedAt))}${q.installerName ? ' · Installation: ' + esc(q.installerName) : ''}${q.helperName ? ' · Helper: ' + esc(q.helperName) : ''}</div>` : ''}</div>

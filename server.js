@@ -1414,6 +1414,7 @@ unit.get('/assembly', (req, res) => {
     // open work + assembled machines still in this unit's godown (gone once transferred or dispatched)
     items: asmList((m) => asmUnitOf(m) === req.user.id && m.source !== 'stock' && (!['cancelled', 'done', 'arrived'].includes(m.status) || inOwnGodown(m))),
     arrived: arrivedOf(req.user.id),
+    allocRecent: allocRecent(req.user.id),
     leaders: ASM.leadersOf(db(), req.user.id).map((p) => ({ id: p.id, name: p.name, pending: ASM.pendingOf(db(), p.id) })),
     maxPending: asmSettings().maxPending,
   });
@@ -1438,6 +1439,7 @@ app.get('/api/staff/assembly', need('staff'), (req, res) => {
     // own machines, plus machines this leader entered (so a wrong entry can be corrected)
     // open work only (assembled machines: admin only)
     arrived: p.role === 'leader' ? arrivedOf(p.unitId) : [],
+    allocRecent: p.role === 'leader' ? allocRecent(p.unitId) : [],
     items: asmList((m) => (!['cancelled', 'done', 'arrived'].includes(m.status) || (p.role === 'leader' && m.leaderId === p.id && inOwnGodown(m))) && (m.leaderId === p.id || m.installerId === p.id || m.helperId === p.id || (m.creator && m.creator.role === 'staff' && m.creator.id === p.id))),
     unitId: p.unitId,
     unitName: unitName(p.unitId),
@@ -1615,6 +1617,7 @@ admin.get('/assembly', (req, res) => {
   res.json({
     // admin only: the divert deduction amounts
     arrived: db().units.filter((u) => !u.deleted).map((u) => ({ unitId: u.id, unitName: u.name, models: arrivedOf(u.id) })).filter((u) => u.models.length),
+    allocRecent: allocRecent(null),
     items: asmList((m) => !['cancelled', 'arrived'].includes(m.status) && (m.status !== 'done' || (m.completedAt || '').slice(0, 10) >= from))
       .map((v) => { const m = db().assembly.find((x) => x.id === v.id); return { ...v, diverts: v.diverts.map((d, i) => ({ ...d, amount: ((m.diverts || [])[i] || {}).amount || 0 })) }; }),
     requests: db().assemblyRequests.slice().reverse().filter((r) => r.status === 'pending' || (r.decidedAt || '') >= new Date(Date.now() - 14 * 86400000).toISOString())
@@ -2894,6 +2897,20 @@ admin.post('/assembly/arrived/qty', (req, res) => {
   res.json({ ok: true });
 });
 admin.post('/assembly/arrived/correct', (req, res) => send(res, correctModel(arrivedList(str(req.body.unitId), str(req.body.model, 120)), req.body.newModel, req.body.qty, 'admin')));
+// Machines from painting allocated in the last 7 days: when, by whom, to which team leader
+function allocRecent(unitId) {
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const g = {};
+  for (const m of db().assembly) {
+    if (!m.allocatedAt || m.allocatedAt < since || (unitId && m.unitId !== unitId) || m.status === 'cancelled') continue;
+    const k = [m.allocatedAt.slice(0, 16), m.allocatedBy || '', m.model, m.unitId].join('|');
+    const x = (g[k] ||= { at: m.allocatedAt, by: m.allocatedBy || '', model: m.model, unitName: unitName(m.unitId), qty: 0, given: {} });
+    x.qty++;
+    const n = m.leaderId ? personName(m.leaderId) || '?' : '⏳ waiting (leaders full)';
+    x.given[n] = (x.given[n] || 0) + 1;
+  }
+  return Object.values(g).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80);
+}
 // "Allocate": share the arrived machines fairly between the unit's team leaders (as before).
 function allocateArrived(unitId, model, by) {
   const all = db().assembly.filter((m) => m.status === 'arrived' && m.unitId === unitId && (!model || m.model === model));
@@ -2905,7 +2922,9 @@ function allocateArrived(unitId, model, by) {
   asmAssign();
   store.save();
   const given = list.filter((m) => m.status !== 'waiting').length;
-  return { value: { id: '', allocated: list.length, given } };
+  const givenTo = {};
+  for (const m of list) { const n = m.leaderId ? personName(m.leaderId) || '?' : '⏳ waiting (leaders full)'; givenTo[n + ' | ' + m.model] = (givenTo[n + ' | ' + m.model] || 0) + 1; }
+  return { value: { id: '', allocated: list.length, given, givenTo } };
 }
 app.post('/api/staff/assembly/allocate', need('staff'), (req, res) => {
   const p = req.user.account;
