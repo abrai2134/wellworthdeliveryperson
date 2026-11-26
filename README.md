@@ -147,3 +147,4 @@ Code layout: `server.js` (web server and API), `lib/scheduler.js` (allocation), 
 - **↩ Undo In** – on an *In painting* line (painting login / admin): machines taken ⬇ In by mistake (not arrived yet) go back to *Coming from fab*; choose how many per line (vendor, unit – fab leader, who did In, when).
 - **Fab done – vendor shown** – the Fab done list (fab logins) has a 🎨 Vendor column, and done machines in the admin / unit lists show "🎨 to vendor …".
 - **Assembly – to whom allocated** – after ⚖️ Allocate a box shows which team leader got how many of each model; *🕒 Allocated from painting – last 7 days* (team leader, unit and admin pages) lists when, by whom, model, unit, qty and given to whom.
+- **Admin 📦 + Add stock per unit** – in the admin Godown stock, each unit's heading has 📦 + Add stock (old stock for that unit: godown or booked for a client), besides the 📦 Add old stock button at the top.

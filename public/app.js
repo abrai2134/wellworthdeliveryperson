@@ -2292,11 +2292,19 @@ function godownText(units) {
   return lines.join('\n');
 }
 
+// admin: 📦 + Add stock on a unit's godown line (old stock for that unit)
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-add-stock-unit]');
+  if (!b) return;
+  const units = A().units.filter((u) => u.active);
+  const u = units.find((x) => x.id === b.dataset.addStockUnit);
+  oldStockForm('/admin/godown/stock', u ? [u] : units, renderAdmin);
+});
 function godownHtml(stock, canSend, title = '🏬 Godown stock') {
   const total = stock.reduce((n, u) => n + u.total, 0);
   // One full-width list: a heading per unit, one line per model (qty, oldest, Send).
   return `<div class="section"><div class="row"><h2 style="margin:0">${title}</h2><div class="spacer"></div><span class="badge w4">${total} machine${total === 1 ? '' : 's'} in godown</span>${stock.length > 1 ? shareButtons(godownText(stock)) : ''}</div>
-    ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${shareButtons(godownText([u]))}</div>
+    ${stock.length ? stock.map((u) => `<div class="done-list asm-group" style="margin-top:8px"><div class="dl-head row"><span><b>🏬 ${esc(u.unitName)}</b> <span class="muted">· ${u.total} machine${u.total === 1 ? '' : 's'}</span></span><span class="spacer"></span>${state.me && state.me.role === 'admin' && canSend ? `<button class="small" data-add-stock-unit="${esc(u.unitId || '')}">📦 + Add stock</button> ` : ''}${shareButtons(godownText([u]))}</div>
       ${u.models.map((m) => `<div class="godown-row"><span class="dr-main"><b>${esc(m.model)}</b>${m.noRate ? NORATE : ''}<span class="small muted">oldest ${esc(ageText(m.oldest))}${m.oldStock ? ` · 📦 ${m.oldStock} old stock` : ''}</span>${(m.entries || []).length ? `<span class="small muted">${m.entries.map((x) => `${esc(x.text)}${x.at ? ` · <span class="nowrap">🕒 ${esc(fmtTime(x.at + ':00Z'))}</span>` : ''}${m.entries.length > 1 || x.qty > 1 ? ` × ${x.qty}` : ''}`).join('<br>')}</span>` : ''}${(m.booked || []).length ? `<span class="booked-list">${m.booked.map((x) => `<span class="booked-line">👤 booked: <b>${esc(x.party)}</b> × ${x.qty}</span>`).join('')}</span>` : ''}</span>
         <span class="godown-qty">${m.qty}</span>${(() => { const n = !state.me ? 0 : ['admin', 'dispatch'].includes(state.me.role) ? m.qty : (m.creators || []).filter((c) => c.role === state.me.role && c.id === state.me.id).reduce((t, c) => t + c.qty, 0); return n ? `<button class="small nowrap" data-stock-edit="${esc(u.unitId)}|${esc(m.model)}|${n}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-booked="${esc(JSON.stringify(m.booked || []))}" title="Correct the model no., booking, or remove extra old stock">✎ Correct</button>` : ''; })()}${canSend ? `<button class="small primary nowrap" data-send="${esc(u.unitId)}|${esc(m.model)}|${m.qty}" data-booked="${esc(JSON.stringify(m.booked || []))}" data-entries="${esc(JSON.stringify(m.entries || []))}" data-norate="${m.noDispatchRate ? 1 : ''}">🚚 Send</button>` : ''}</div>`).join('')}</div>`).join('')
     : '<div class="card muted" style="margin-top:8px">No machine in the godown.</div>'}</div>`;
