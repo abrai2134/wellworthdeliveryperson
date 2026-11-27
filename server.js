@@ -1784,9 +1784,18 @@ admin.post('/assembly/requests/:id/:action', (req, res) => {
 });
 // keep "added by <team leader>" on a rate when the admin saves the list again
 const modelKey = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-function addedBy(list, x) {
+const adminWho = (req) => { const u = (req.user && req.user.account && req.user.account.username) || ''; return u && u !== 'admin' ? `admin (${u})` : 'admin'; };
+// keeps who added a rate; when a rate is changed (or a new model added) records who did it and when
+function addedBy(list, x, by, keys, fresh) {
   const old = (list || []).find((o) => modelKey(o.model) === modelKey(x && x.model));
-  return old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {};
+  const out = old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : {};
+  if (old && old.editedBy) Object.assign(out, { editedBy: old.editedBy, editedAt: old.editedAt });
+  if (by && keys) {
+    const now = new Date().toISOString();
+    if (!old) Object.assign(out, { addedBy: by, addedAt: now });
+    else if (keys.some((k) => Number(old[k] || 0) !== Number(fresh[k] || 0))) Object.assign(out, { editedBy: by, editedAt: now, editedFrom: Object.fromEntries(keys.map((k) => [k, old[k] || 0])) });
+  }
+  return out;
 }
 
 // Team leaders can see the rates and ADD a model that is not in a list yet (not change rates).
@@ -1850,6 +1859,7 @@ admin.put('/assembly/settings', (req, res) => {
   { const dup = (Array.isArray(b.incentives) && duplicateIn(b.incentives, 'assembly incentive')) || (Array.isArray(b.dispatchIncentives) && duplicateIn(b.dispatchIncentives, 'dispatch incentive')); if (dup) return bad(res, dup); }
   const cur = asmSettings();
   const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
+  const who = adminWho(req); // which admin login changed a rate
   db().settings.assembly = {
     maxPending: Math.max(1, Math.min(50, parseInt(b.maxPending, 10) || cur.maxPending)),
     defaultLeader: b.defaultLeader !== undefined ? money(b.defaultLeader) : cur.defaultLeader,
@@ -1864,10 +1874,10 @@ admin.put('/assembly/settings', (req, res) => {
       ? b.unitDispatchSlabs.map((x) => ({ from: Math.max(1, parseInt(x && x.from, 10) || 0), amount: money(x && x.amount) })).filter((x) => x.from >= 1).sort((a, c) => a.from - c.from).slice(0, 10)
       : cur.unitDispatchSlabs,
     dispatchIncentives: Array.isArray(b.dispatchIncentives)
-      ? b.dispatchIncentives.map((x) => ({ model: canonModel(x && x.model), amount: money(x && x.amount), ...addedBy(cur.dispatchIncentives, x) })).filter((x) => x.model).slice(0, 300)
+      ? b.dispatchIncentives.map((x) => { const r = { model: canonModel(x && x.model), amount: money(x && x.amount) }; return { ...r, ...addedBy(cur.dispatchIncentives, x, who, ['amount'], r) }; }).filter((x) => x.model).slice(0, 300)
       : cur.dispatchIncentives || [],
     incentives: Array.isArray(b.incentives)
-      ? b.incentives.map((x) => ({ model: canonModel(x && x.model), leader: money(x && x.leader), installer: money(x && x.installer), ...addedBy(cur.incentives, x) })).filter((x) => x.model).slice(0, 300)
+      ? b.incentives.map((x) => { const r = { model: canonModel(x && x.model), leader: money(x && x.leader), installer: money(x && x.installer) }; return { ...r, ...addedBy(cur.incentives, x, who, ['leader', 'installer'], r) }; }).filter((x) => x.model).slice(0, 300)
       : cur.incentives,
   };
   refreshDispatchIncentives();
@@ -2681,7 +2691,7 @@ admin.put('/bend/settings', (req, res) => {
   db().settings.bend = {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
-    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
+    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '', adminWho(req)) : cur.contractorRates || [],
   };
   refreshBendAmounts();
   bendAssign();
@@ -3177,7 +3187,7 @@ admin.post('/fab/:id/cancel', (req, res) => {
   res.json({ ok: true });
 });
 // The whole fab rate list from the editor (admin or fab manager). New rows remember who added them.
-function readFabRates(rows, cur, by) {
+function readFabRates(rows, cur, by, editBy) {
   const money = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
   const out = [];
   for (const x of rows) {
@@ -3185,7 +3195,11 @@ function readFabRates(rows, cur, by) {
     if (!model || out.some((o) => ASM.sameRate(o.model, model))) continue; // no empty / double rows
     const old = (cur.contractorRates || []).find((o) => ASM.sameRate(o.model, model));
     const keep = (k) => (x && x[k] !== undefined && x[k] !== '' ? { [k]: money(x[k]) } : old && old[k] ? { [k]: old[k] } : {});
-    out.push({ model, rate: money(x && x.rate), ...keep('payroll'), ...keep('payrollLeader'), ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
+    const row = { model, rate: money(x && x.rate), ...keep('payroll'), ...keep('payrollLeader') };
+    // who changed a rate, and when
+    const changed = old && ['rate', 'payroll', 'payrollLeader'].some((k) => Number(old[k] || 0) !== Number(row[k] || 0));
+    const ed = changed && (by || editBy) ? { editedBy: by || editBy, editedAt: new Date().toISOString() } : old && old.editedBy ? { editedBy: old.editedBy, editedAt: old.editedAt } : {};
+    out.push({ ...row, ...ed, ...(old && old.addedBy ? { addedBy: old.addedBy, addedAt: old.addedAt } : !old && by ? { addedBy: by, addedAt: new Date().toISOString() } : {}) });
   }
   return out.slice(0, 300);
 }
@@ -3206,7 +3220,7 @@ admin.put('/fab/settings', (req, res) => {
   db().settings.fab = {
     ...cur,
     maxPending: req.body.maxPending !== undefined ? Math.max(1, Math.min(100, parseInt(req.body.maxPending, 10) || 10)) : cur.maxPending,
-    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '') : cur.contractorRates || [],
+    contractorRates: Array.isArray(req.body.contractorRates) ? readFabRates(req.body.contractorRates, cur, '', adminWho(req)) : cur.contractorRates || [],
   };
   refreshFabAmounts();
   fabAssign();
