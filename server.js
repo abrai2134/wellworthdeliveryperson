@@ -2812,7 +2812,7 @@ function arrivedOf(unitId) {
     const px = m.paintId && db().painting.find((x) => x.id === m.paintId);
     const fx = px && px.fabId && db().fab.find((f) => f.id === px.fabId);
     const whose = fx ? ` · from fab ${unitName(fx.unitId) ? unitName(fx.unitId) + ' – ' : ''}${personName(fx.leaderId) || '?'}` : px && px.madeBy ? ` · made by ${px.madeBy}` : '';
-    const text = `⬆ out of painting by ${m.createdBy === 'admin' ? 'Admin' : `${m.createdBy || '?'}${login ? ` (${login})` : ''}`}${whose}${px && px.vendor ? ' · 🎨 vendor ' + px.vendor : ''}`;
+    const text = m.source === 'direct' ? `➕ added directly by Admin (not from painting)${m.note ? ' – ' + m.note : ''}` : `⬆ out of painting by ${m.createdBy === 'admin' ? 'Admin' : `${m.createdBy || '?'}${login ? ` (${login})` : ''}`}${whose}${px && px.vendor ? ' · 🎨 vendor ' + px.vendor : ''}`;
     const at = String(m.arrivedAt || '').slice(0, 16);
     (x.entries[text + '|' + at] ||= { text, at, qty: 0 }).qty++;
   }
@@ -2904,6 +2904,20 @@ admin.post('/assembly/arrived/qty', (req, res) => {
     store.save();
     return res.json({ ok: true, added: n });
   }
+  res.json({ ok: true });
+});
+// Admin: old machines (not from painting) put straight into a unit's "Arrived" list, for ⚖️ Allocate
+admin.post('/assembly/arrived/add', (req, res) => {
+  const unitId = str(req.body.unitId);
+  if (!liveUnit(unitId)) return bad(res, 'Choose the unit');
+  const model = canonModel(req.body.model);
+  if (!model) return bad(res, 'Enter the model no.');
+  { const miss = rateMissing(model); if (miss) return bad(res, miss); }
+  const qty = parseInt(req.body.qty, 10);
+  if (!(qty >= 1 && qty <= 100)) return bad(res, 'Quantity must be 1 to 100');
+  const at = new Date().toISOString();
+  for (let i = 0; i < qty; i++) db().assembly.push({ id: newId('asm'), unitId, model, status: 'arrived', arrivedAt: at, source: 'direct', createdAt: at, createdBy: 'admin', creator: { role: 'admin', id: 'admin' }, entryBy: 'admin (added for allocation)', note: str(req.body.note, 200) });
+  store.save();
   res.json({ ok: true });
 });
 admin.post('/assembly/arrived/correct', (req, res) => send(res, correctModel(arrivedList(str(req.body.unitId), str(req.body.model, 120)), req.body.newModel, req.body.qty, 'admin')));

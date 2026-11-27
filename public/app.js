@@ -2075,6 +2075,8 @@ async function adminAssembly(main) {
       <button id="asm-old">📁 Add old machine</button><button id="asm-stock">📦 Add stock</button><button class="primary" id="asm-add">+ Machines for assembly</button></div>
     <div class="section"><h2>👷 Team leaders by unit</h2><div class="muted small" style="margin-bottom:8px">Machines of a unit are shared equally between its team leaders (each with 1 installation person + 1 helper of the unit). Adding a leader gives out waiting machines at once; removing one sends their unfinished machines back to the others. Give a PIN so the leader can log in.</div>
       <div class="grid">${leaderCards}</div></div>
+    <div class="row section"><h2 style="margin:0">🎨 Arrived for allocation</h2><div class="spacer"></div><button class="small" id="arr-add">➕ Add machines for allocation</button></div>
+    <div class="small muted">Old models that did not come from painting: add them here, then a team leader of the unit (or you) presses ⚖️ Allocate.</div>
     ${(r.arrived || []).map((u) => `<div><b>🏢 ${esc(u.unitName)}</b>${arrivedHtml(u.models, '/admin/assembly/allocate', u.unitId)}</div>`).join('')}${allocRecentHtml(r.allocRecent)}
     ${pendingReq.length ? `<div class="card section"><h2>📝 Requests from team leaders (${pendingReq.length})</h2><div class="small muted">📝 = wants new machines · 📁 = old machine to add to their record</div>${pendingReq.map((q) => `<div class="row" style="border-bottom:1px solid var(--line);padding:6px 0">
         <div><b>${esc(q.leaderName)}</b> <span class="small muted">${esc(q.unitName)} · ${q.leaderPending} pending now</span><div class="small">${q.type === 'old' ? '<span class="badge warn">📁 Old machine</span> ' : '📝 '}⚙️ ${esc(q.model)} × ${q.qty}${q.note ? ' · ' + esc(q.note) : ''} · sent ${esc(fmtTime(q.createdAt))}</div>
@@ -2125,6 +2127,17 @@ async function adminAssembly(main) {
   bindAsm(main, '/admin/assembly', r.items, renderAdmin);
   api('/admin/godown').then((g) => { state.loaderNames = g.loaderNames || []; state.loaderOrder = g.loaderOrder || []; }).catch(() => {});
   bindSend(main, '/admin/godown/send', A().units.filter((u) => u.active), renderAdmin);
+  const arrAdd = document.getElementById('arr-add');
+  if (arrAdd) arrAdd.onclick = async () => {
+    const models = await loadMachineList();
+    openModal(`<h2>➕ Add machines for allocation</h2><p class="small muted">Old models (not from painting). They show in the unit as "Arrived" – then ⚖️ Allocate gives them to team leaders. Only models with an assembly incentive rate.</p>
+      <label>Unit *</label><select name="unitId" required><option value="">— choose —</option>${A().units.filter((u) => u.active).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+      <div class="form-grid"><div><label>⚙️ Model no. *</label><input name="model" list="arr-models" required></div><div><label>Quantity *</label><input name="qty" type="number" min="1" max="100" value="1" required></div></div>
+      <datalist id="arr-models">${models.map((x) => `<option value="${esc(typeof x === 'string' ? x : x.label)}"></option>`).join('')}</datalist>
+      <label>Note</label><input name="note" placeholder="optional (e.g. old stock frame)">
+      <div class="actions"><button value="cancel">Cancel</button><button class="primary" value="ok">➕ Add</button></div>`,
+    async (fd) => { if (!fd.get('unitId')) throw new Error('Choose the unit'); await api('/admin/assembly/arrived/add', { method: 'POST', body: Object.fromEntries(fd) }); toast('Added – ready to allocate'); renderAdmin(); });
+  };
   document.getElementById('add-stock').onclick = () => oldStockForm('/admin/godown/stock', A().units.filter((u) => u.active), renderAdmin);
   api('/dispatch/board').then((b) => {
     const box = document.getElementById('adm-dsp-board');
