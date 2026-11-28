@@ -1205,7 +1205,8 @@ function unitForm(u) {
 function adminPeople(main) {
   const units = A().units;
   const t = A().today;
-  const row = (p) => `<tr>
+  const statusOf = (p) => (!p.active ? 'inactive' : onLeaveOn(p.id, t) ? 'leave' : 'active');
+  const row = (p) => `<tr data-pq="${esc([p.name, p.username, p.phone, p.unitName, ROLE_NAMES[p.role] || p.role].join(' ').toLowerCase())}" data-pst="${statusOf(p)}" data-pu="${esc(p.unitId || '')}">
     <td><b>${esc(p.name)}</b></td><td>${roleBadge(p.role)} ${p.backup ? '<span class="badge bad">🆘 Backup</span>' : ''}</td>
     <td>${esc(p.unitName || '—')}</td><td>${telLink(p.phone)}</td>
     <td>${p.canLogin ? `<code>${esc(p.username)}</code>` : '<span class="muted small">no login</span>'}</td>
@@ -1216,10 +1217,29 @@ function adminPeople(main) {
   main.innerHTML = `<div class="row section"><div><h1>Helpers &amp; installation persons</h1>
       <div class="muted small">${count('helper')} regular helpers · ${count('installer')} regular installation persons · ${A().people.filter((p) => p.active && p.backup).length} emergency backup</div></div>
       <div class="spacer"></div><button class="primary" id="add">+ Add person</button></div>
-    ${A().people.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Work</th><th>Unit</th><th>Phone</th><th>Login</th><th>Status</th><th></th></tr></thead><tbody>${sorted.map(row).join('')}</tbody></table></div>` : `<div class="card muted">${units.length ? 'No people yet. Add your helpers and installation persons.' : 'Add a unit first.'}</div>`}
+    <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap"><input id="pp-q" placeholder="🔍 Search name, login, phone, unit, work…" style="flex:2;min-width:200px">
+      <select id="pp-st" style="width:auto"><option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option><option value="leave">On leave</option></select>
+      <select id="pp-u" style="width:auto"><option value="">All units</option>${units.filter((u) => !u.deleted).map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('')}</select>
+      <span class="small muted" id="pp-n"></span></div>
+    ${A().people.length ? `<div class="table-wrap"><table id="pp-table"><thead><tr><th>Name</th><th>Work</th><th>Unit</th><th>Phone</th><th>Login</th><th>Status</th><th></th></tr></thead><tbody>${sorted.map(row).join('')}</tbody></table></div>` : `<div class="card muted">${units.length ? 'No people yet. Add your helpers and installation persons.' : 'Add a unit first.'}</div>`}
     <p class="muted small">Everyone is shared across all units, and work is shared equally. <b>Emergency backup</b> people are only used when regular people are not enough, or when a unit picks them for an emergency. A new person starts level with the others.</p>`;
   document.getElementById('add').onclick = () => personForm();
   main.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => personForm(A().people.find((p) => p.id === b.dataset.edit))));
+  // 🔍 search + status / unit filter (remembered while the page is open)
+  const q = document.getElementById('pp-q'), st = document.getElementById('pp-st'), un = document.getElementById('pp-u');
+  const f = state.peopleFilter || (state.peopleFilter = { q: '', st: '', u: '' });
+  q.value = f.q; st.value = f.st; un.value = f.u;
+  const apply = () => {
+    f.q = q.value; f.st = st.value; f.u = un.value;
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let n = 0;
+    main.querySelectorAll('#pp-table tbody tr').forEach((tr) => {
+      const ok = words.every((w) => tr.dataset.pq.includes(w)) && (!st.value || tr.dataset.pst === st.value) && (!un.value || tr.dataset.pu === un.value);
+      tr.hidden = !ok; if (ok) n++;
+    });
+    document.getElementById('pp-n').textContent = `${n} shown`;
+  };
+  q.oninput = apply; st.onchange = apply; un.onchange = apply; apply();
 }
 
 function personForm(p, unitId, role) {
